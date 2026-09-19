@@ -1,6 +1,6 @@
 {
   "name": "@jameslovespancakes/pi-plus",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "type": "module",
   "description": "Consolidated pi extensions: Claude subscription accounts and quota HUD, benchmark-driven model catalog and billing policy, live agent board, and capacity-gated remote test workers.",
   "license": "MIT",
