@@ -8,6 +8,8 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-09-19
+
 ### Fixed
 
 - The build badge reads the release workflow instead of the CI workflow. A
@@ -118,7 +120,8 @@ First published release.
   truncated to `claude` and named neither the window nor the model. They now
   show the model family, for example `Fable`.
 
-[Unreleased]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.5...HEAD
+[Unreleased]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.6...HEAD
+[1.0.6]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.5...v1.0.6
 [1.0.5]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.2...v1.0.3
