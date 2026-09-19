@@ -1,8 +1,6 @@
 <div align="center">
 
-<img src="images/pi-plus.svg" alt="pi-plus" width="140">
-
-# pi-plus
+<img src="images/pi-plus.svg" alt="pi-plus" width="160">
 
 **Everything [pi](https://pi.dev/) is missing, in one install.**
 
@@ -184,10 +182,30 @@ pi-plus is a thin layer over other people's work.
 
 | project | what it does here | license |
 | --- | --- | --- |
-| [`pi`](https://pi.dev/)| the host agent and the entire extension API | MIT |
-| [`@cortexkit/pi-anthropic-auth`](https://github.com/cortexkit/anthropic-auth) | Claude OAuth, the Anthropic provider, token refresh and routing primitives | MIT |
+| [`pi`](https://pi.dev/) | the host agent and the entire extension API | MIT |
+| [`xxhash-wasm`](https://github.com/jungomi/xxhash-wasm) | vendored into `src/core/anthropic/vendor/` for the billing checksum | MIT |
+
+The Anthropic provider, OAuth, quota and routing were originally adopted from
+[`@cortexkit/pi-anthropic-auth`](https://github.com/cortexkit/anthropic-auth)
+(MIT) and have since been reimplemented in this repository.
 
 
 ## License
 
 MIT
+
+
+## Disclaimer
+
+pi-plus is an unofficial, independent project. It is not affiliated with,
+endorsed by, or supported by Anthropic, OpenAI, pi, or any other provider
+named here.
+
+**You are responsible for using it within the terms of service of every
+provider you connect it to.** This tool manages credentials for accounts you
+already own and pools requests across them. Whether that is permitted, and
+whether a given account may be used for a given purpose, is governed by your
+agreement with that provider and not by this software. Review those terms
+before connecting an account, and keep in mind that they change.
+
+Provided as is, without warranty of any kind. See [LICENSE](LICENSE).

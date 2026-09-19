@@ -8,6 +8,16 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+### Changed
+
+- The README leads with the mark alone instead of repeating the name beneath
+  it, and credits the Anthropic provider correctly: it was adopted from
+  `@cortexkit/pi-anthropic-auth` and has since been reimplemented here.
+
+### Added
+
+- A disclaimer covering provider terms of service.
+
 ## [1.0.3] - 2026-09-19
 
 ### Added
