@@ -32,8 +32,8 @@
     },
     "workers": [
       {
-        "name": "mac-mini",
-        "ssh": "mac-mini",
+        "name": "mac-box",
+        "ssh": "mac-box",
         "root": "~/remote_tests",
         "nice": 10,
         "tags": [
@@ -44,8 +44,8 @@
         ]
       },
       {
-        "name": "hyperion",
-        "ssh": "hyperion",
+        "name": "linux-box",
+        "ssh": "linux-box",
         "root": "~/remote_tests",
         "nice": 10,
         "tags": [

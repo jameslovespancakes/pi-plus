@@ -68,7 +68,7 @@ test("every legacy file folds into the right section", async () => {
     "model-quality-key.json": { artificialAnalysis: "aa_legacy" },
     "agent-board.json": { url: "ws://old:8787/ws", token: "tok", adminName: "james" },
     "model-policy.json": { autoApprove: ["anthropic/*"], requireApproval: ["openrouter/*"], deny: ["xai/*"] },
-    "remote.json": { injectStatus: false, workers: [{ name: "hyperion", ssh: "hyperion" }] },
+    "remote.json": { injectStatus: false, workers: [{ name: "linux-box", ssh: "linux-box" }] },
   });
   try {
     const config = module.readConfig();
@@ -76,7 +76,7 @@ test("every legacy file folds into the right section", async () => {
     assert.equal(config.env.AGENT_BOARD_URL, "ws://old:8787/ws");
     assert.equal(config.env.AGENT_BOARD_NAME, "james");
     assert.deepEqual(config.policy.deny, ["xai/*"]);
-    assert.equal(config.remote.workers[0].name, "hyperion");
+    assert.equal(config.remote.workers[0].name, "linux-box");
     assert.equal(config.remote.injectStatus, false);
     assert.equal(read().env.AGENT_BOARD_TOKEN, "tok", "migration is persisted, not just in memory");
   } finally {
@@ -86,10 +86,10 @@ test("every legacy file folds into the right section", async () => {
 
 test("the oldest worker filename still migrates", async () => {
   const { module, cleanup } = await setup({
-    "remote-workers.json": { workers: [{ name: "mac-mini", ssh: "mac-mini" }] },
+    "remote-workers.json": { workers: [{ name: "mac-box", ssh: "mac-box" }] },
   });
   try {
-    assert.equal(module.readConfig().remote.workers[0].name, "mac-mini");
+    assert.equal(module.readConfig().remote.workers[0].name, "mac-box");
   } finally {
     cleanup();
   }

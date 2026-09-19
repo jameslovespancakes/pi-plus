@@ -18,3 +18,8 @@ config/anthropic-auth*.json
 # test scratch
 .tmp/
 .npmrc
+
+# Local env files, never commit
+.env
+.env.*
+!.env.example

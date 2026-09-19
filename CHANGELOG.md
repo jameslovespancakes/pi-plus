@@ -8,6 +8,16 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+### Changed
+
+- The example config and its test use placeholder worker names. The previous
+  ones were real hosts from the author's machine, which mattered once the
+  repository became public.
+
+### Added
+
+- `.env` files are git-ignored.
+
 ## [1.0.10] - 2026-09-19
 
 ### Fixed
