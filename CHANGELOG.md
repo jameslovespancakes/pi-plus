@@ -12,6 +12,18 @@ rolls into major at 10.
 
 ### Changed
 
+- The README shows each interface as text rather than a screenshot. The blocks
+  are generated from the real renderers with dummy data, so they cannot drift
+  from the code the way the screenshots had, and they stay readable in a
+  terminal, a diff and on npm.
+
+### Removed
+
+- The five demo screenshots. Only the project mark remains, which takes the
+  published package from 489KB to 375KB.
+
+### Changed
+
 - The README leads with the mark alone instead of repeating the name beneath
   it, and credits the Anthropic provider correctly: it was adopted from
   `@cortexkit/pi-anthropic-auth` and has since been reimplemented here.

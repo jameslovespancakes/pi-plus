@@ -26,7 +26,18 @@ pi install /path/to/pi-plus                          # local checkout
 Then run **`/pi-plus`**. It shows what is configured and what is not, and enter
 on any row starts that setup.
 
-<img src="images/pi-plus_demo.png" alt="The /pi-plus status modal listing each feature and its state" width="700">
+```
+──────────────────────────────────────────────────────────
+ pi-plus
+› ● Subscriptions   2 accounts · optimal
+  ● Model Information  catalogue cached
+  ● Providers       2 allowed · 4 need approval
+  ● Agent Board     not configured
+  ● Remote Workers  1 worker
+
+  Enter to set up · Esc to close
+──────────────────────────────────────────────────────────
+```
 
 `/pi-plus help` asks the model to explain the pack and what you are missing.
 Nothing else is required, every feature configures itself from within pi.
@@ -48,7 +59,13 @@ confirmed exhaustion.
 
 Your live quota, always in the footer:
 
-<img src="images/usage_demo.png" alt="Claude subscription quota bars in the pi footer" width="680">
+```
+  Claude Σ2 · 2/2 ready · partial                 Codex · pro
+  5h     █████████████████░░░░░░░░░   65% 1h     5h     ███████████████████████░░░   88% 57m
+  weekly ███████████████░░░░░░░░░░░   58% 3d     weekly ████████████████████████░░   93% 6d
+  Fable  ████████████░░░░░░░░░░░░░░  ~47% 3d
+  Work 72% · Personal 58%
+```
 
 With more than two accounts only the two most recently used are listed, so the
 footer stays a fixed height however many you pool.
@@ -79,7 +96,17 @@ Metered providers are gated **at the provider boundary**, not by prompt
 instructions, so it covers workflow subagents too. `/provider` shows every
 provider you have credentials for and toggles each one:
 
-<img src="images/provider_demo.png" alt="The /provider picker toggling provider approval" width="560">
+```
+──────────────────────────────────────────────────────────
+ Providers
+› ● Anthropic      Allowed
+  ● OpenAI Codex   Allowed
+  ● OpenRouter     Needs Approval
+  ● Google         Needs Approval
+
+  Enter/Space to change · Esc to cancel
+──────────────────────────────────────────────────────────
+```
 
 ### Run tests on real hardware
 
@@ -87,7 +114,16 @@ provider you have credentials for and toggles each one:
 toggle which are eligible. No SSH config? It generates a dedicated key, shows
 the one line to run, and verifies.
 
-<img src="images/remote_demo.png" alt="The /remote picker toggling SSH workers" width="700">
+```
+──────────────────────────────────────────────────────────
+ Remote Workers
+› ● build-box      READY  CPU 4% MEM 12% GPU 0% · 0 jobs
+  ● gpu-node       READY  CPU 9% MEM 31% GPU 0% · 0 jobs
+  ● old-laptop     UNREACHABLE  connection timed out
+
+  Enter/Space to toggle · Esc to cancel
+──────────────────────────────────────────────────────────
+```
 
 `remote_test` snapshots your working tree, admission-checks CPU/GPU/disk,
 reserves a slot, and **deletes the uploaded source the moment the run ends**,
@@ -99,7 +135,19 @@ still happens if your laptop sleeps.
 `agent_board` gives live presence, messaging, repo rooms and coordinator chains
 across every running pi agent. `/board` opens the messaging view:
 
-<img src="images/board_demo.png" alt="The /board messaging view" width="700">
+```
+╭────────────────────────────────────────────────────────╮
+│ Messaging Board  online  · 3 chats                     │
+│ 1 repo:pi-plus │ 2 reviewer │ 3 direct                 │
+│ ────────────────────────────────────────────────────── │
+│ reviewer   rebased onto main, tests green at a1b2c3d   │
+│ builder    picking up the parser, leaving lexer alone  │
+│ you        ack, I will take the CLI surface            │
+│ ────────────────────────────────────────────────────── │
+│ Message  > _                                           │
+│ enter send · tab next chat · esc close                 │
+╰────────────────────────────────────────────────────────╯
+```
 
 `/board setup` installs the server locally (pi starts it each session) or onto
 any Mac or Linux host over SSH, where launchd or systemd brings it back after a
