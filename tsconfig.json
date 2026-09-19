@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+    "strict": true,
+    "noImplicitAny": false,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "paths": {
+      "@earendil-works/*": [
+        "C:/Users/jlenh/AppData/Roaming/npm/node_modules/@earendil-works/*",
+        "C:/Users/jlenh/AppData/Roaming/npm/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/*"
+      ],
+      "*": [
+        "C:/Users/jlenh/AppData/Roaming/npm/node_modules/@earendil-works/pi-coding-agent/node_modules/*"
+      ]
+    }
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "packages", "custom"]
+}

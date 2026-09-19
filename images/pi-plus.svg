@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800">
+  <!-- Original Pi logo paths, unchanged -->
+  <path fill="#F09082" d="M165.29 165.29H517.36V400H400V282.65H165.29Z"/>
+  <path fill="#4D9ABF" d="M165.29 282.65H282.65V400H400V517.36H282.65V634.72H165.29Z"/>
+  <path fill="#F1BE58" d="M517.36 400H634.72V634.72H517.36Z"/>
+
+  <!-- Plus mark, matching the logo's square/pixel geometry -->
+  <path fill="#F09082" d="M697.84 223.97H736.96V263.09H776.08V302.21H736.96V341.33H697.84V302.21H658.72V263.09H697.84Z"/>
+</svg>

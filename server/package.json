@@ -1,0 +1,17 @@
+{
+  "name": "pi-plus-board-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Agent board server for pi-plus",
+  "main": "board-server.mjs",
+  "scripts": {
+    "start": "node board-server.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "lastChangelogVersion": "0.85.1",
+  "theme": "dark",
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-6-astra",
+  "packages": [
+    "npm:pi-workflow-engine",
+    "npm:@cortexkit/pi-anthropic-auth"
+  ],
+  "retry": {
+    "enabled": false,
+    "maxRetries": 5,
+    "baseDelayMs": 2000,
+    "provider": {
+      "timeoutMs": 3600000,
+      "maxRetries": 0,
+      "maxRetryDelayMs": 60000
+    }
+  },
+  "transport": "sse",
+  "httpIdleTimeoutMs": 900000
+}

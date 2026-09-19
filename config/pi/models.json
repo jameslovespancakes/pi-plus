@@ -1,0 +1,22 @@
+{
+  "providers": {
+    "openrouter": {
+      "models": [
+        {
+          "id": "stealth/union-alpha",
+          "name": "Union Alpha (stealth)",
+          "api": "openai-completions",
+          "reasoning": false,
+          "input": ["text", "image"],
+          "contextWindow": 262144,
+          "maxTokens": 131072,
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+          "compat": {
+            "supportsReasoningEffort": false,
+            "maxTokensField": "max_tokens"
+          }
+        }
+      ]
+    }
+  }
+}

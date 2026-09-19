@@ -1,0 +1,88 @@
+/**
+ * Provider-agnostic subscription accounts.
+ *
+ * Today only Anthropic implements this, through
+ * `domains/subscriptions/providers/anthropic.ts`. The point of the indirection
+ * is that `/account` and `/routing` contain no provider-specific logic, so a
+ * second provider is a new adapter rather than a new command surface.
+ *
+ * Structural types only — nothing here imports pi.
+ */
+
+export interface ManagedAccount {
+  id: string;
+  label: string;
+  /** False when the account is configured but deliberately skipped. */
+  enabled: boolean;
+  /** OAuth expiry, when the provider exposes one. */
+  expiresAt?: number;
+  /** True for the account pi itself is authenticated as. */
+  primary?: boolean;
+}
+
+/**
+ * `standard` uses the main account first and falls back only when it is
+ * exhausted. `optimal` balances across accounts by remaining quota and time to
+ * reset, keeping session caches sticky.
+ */
+export type RoutingMode = "standard" | "optimal";
+
+export interface AccountUi {
+  input(title: string, placeholder?: string): Promise<string | undefined>;
+  confirm(title: string, message: string): Promise<boolean>;
+  notify(message: string, type?: "info" | "warning" | "error"): void;
+}
+
+export interface AccountContext {
+  ui: AccountUi;
+  hasUI: boolean;
+  /** Opens a URL in the user's browser, for OAuth flows. */
+  openBrowser(url: string): Promise<void>;
+}
+
+export interface RoutingSupport {
+  get(): Promise<RoutingMode>;
+  set(mode: RoutingMode): Promise<RoutingMode>;
+  describe(mode: RoutingMode): string;
+}
+
+export interface AccountProvider {
+  /** Matches the pi provider id, e.g. "anthropic". */
+  id: string;
+  /** Human name, e.g. "Claude". */
+  label: string;
+  list(): Promise<ManagedAccount[]>;
+  /** Returns the label of the account that was added. */
+  add(ctx: AccountContext, label: string): Promise<string | undefined>;
+  /** Returns the label of the account that was reauthorized. */
+  reauth(ctx: AccountContext, accountId: string): Promise<string | undefined>;
+  /**
+   * Enables or disables one account without removing its credentials.
+   * Optional: a provider that cannot suspend accounts simply omits it.
+   */
+  setEnabled?(accountId: string, enabled: boolean): Promise<void>;
+  routing?: RoutingSupport;
+}
+
+const providers = new Map<string, AccountProvider>();
+
+export function registerAccountProvider(provider: AccountProvider): void {
+  providers.set(provider.id, provider);
+}
+
+export function accountProviders(): AccountProvider[] {
+  return [...providers.values()].sort((a, b) => a.id.localeCompare(b.id));
+}
+
+export function accountProvider(id: string): AccountProvider | undefined {
+  return providers.get(id.toLowerCase());
+}
+
+/** Providers that can balance across more than one account. */
+export function routableProviders(): AccountProvider[] {
+  return accountProviders().filter((provider) => provider.routing !== undefined);
+}
+
+export function resetAccountProviders(): void {
+  providers.clear();
+}

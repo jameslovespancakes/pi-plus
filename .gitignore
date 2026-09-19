@@ -1,0 +1,19 @@
+node_modules/
+server/node_modules/
+board-data/
+
+# Real config carries live tokens. Only pi-plus.example.json is tracked.
+config/pi-plus.json
+config/pi-plus.env.json
+config/agent-board.json
+config/model-quality-key.json
+config/auth.json
+config/anthropic-auth*.json
+*.bak
+*.log
+
+# npm pack output
+*.tgz
+
+# test scratch
+.tmp/

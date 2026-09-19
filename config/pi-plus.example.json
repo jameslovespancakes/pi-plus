@@ -1,0 +1,60 @@
+{
+  "env": {
+    "ARTIFICIAL_ANALYSIS_API_KEY": "<artificial-analysis-api-key>",
+    "AGENT_BOARD_URL": "ws://<board-host>:8787/ws",
+    "AGENT_BOARD_TOKEN": "<agent-board-token>",
+    "AGENT_BOARD_NAME": "you"
+  },
+  "policy": {
+    "autoApprove": [
+      "anthropic/*",
+      "openai-codex/*",
+      "openrouter/stealth/union-alpha"
+    ],
+    "requireApproval": [
+      "openrouter/*",
+      "google/*",
+      "openai/*",
+      "xai/*"
+    ],
+    "deny": []
+  },
+  "remote": {
+    "injectStatus": true,
+    "defaults": {
+      "cpuBlockPercent": 90,
+      "gpuBlockPercent": 90,
+      "gpuMemoryBlockPercent": 90,
+      "memoryBlockPercent": 90,
+      "minimumFreeDiskGB": 10,
+      "statusCacheSeconds": 30,
+      "retentionHours": 24
+    },
+    "workers": [
+      {
+        "name": "mac-mini",
+        "ssh": "mac-mini",
+        "root": "~/remote_tests",
+        "nice": 10,
+        "tags": [
+          "macos",
+          "arm64",
+          "gpu",
+          "metal"
+        ]
+      },
+      {
+        "name": "hyperion",
+        "ssh": "hyperion",
+        "root": "~/remote_tests",
+        "nice": 10,
+        "tags": [
+          "linux",
+          "x64",
+          "gpu",
+          "cuda"
+        ]
+      }
+    ]
+  }
+}

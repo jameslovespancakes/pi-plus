@@ -1,0 +1,82 @@
+name: Release
+
+# Every push to main that passes the suite is bumped and published.
+# Skip a release by putting [skip release] in the commit message.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: "!contains(github.event.head_commit.message, '[skip release]')"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Install
+        run: npm install --no-audit --no-fund
+
+      # ---- gate: nothing publishes unless all of this passes ----
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Guard against credentials in the tarball
+        run: |
+          npm pack --dry-run --json \
+            | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const f=JSON.parse(d)[0].files.map(x=>x.path);const bad=f.filter(p=>/^config\/(pi-plus|pi-plus\.env|agent-board|model-quality-key)\.json$/.test(p));if(bad.length){console.error('Secret file staged for publish:',bad.join(', '));process.exit(1)}console.log('tarball clean:',f.length,'files')})"
+
+      # ---- bump ----
+      - name: Bump version
+        id: bump
+        run: node scripts/bump-version.mjs
+
+      - name: Abort if the version already exists on npm
+        run: |
+          if npm view "$(node -p "require('./package.json').name")@${{ steps.bump.outputs.to }}" version >/dev/null 2>&1; then
+            echo "Version ${{ steps.bump.outputs.to }} is already published."
+            exit 1
+          fi
+
+      # ---- publish ----
+      - name: Publish to npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Commit and tag
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json
+          git commit -m "Release v${{ steps.bump.outputs.to }} [skip release]"
+          git tag "v${{ steps.bump.outputs.to }}"
+          git push origin main --follow-tags
+
+      - name: Summary
+        run: |
+          {
+            echo "### Released \`${{ steps.bump.outputs.from }}\` → \`${{ steps.bump.outputs.to }}\`"
+            echo
+            echo "\`\`\`sh"
+            echo "pi install npm:$(node -p "require('./package.json').name")"
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"
