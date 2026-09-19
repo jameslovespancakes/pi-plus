@@ -26,6 +26,9 @@ async function providerRows(ctx: any): Promise<ProviderRow[]> {
     for (const model of await ctx.modelRegistry.getAvailable()) ids.add(model.provider);
   } catch { /* registry unavailable */ }
 
+  // The copy is deliberate: the body deletes from `ids` while iterating, which
+  // is unsafe without it. oxlint cannot see the mutation below.
+  // oxlint-disable-next-line unicorn/no-useless-spread
   for (const id of [...ids]) {
     try {
       if (!ctx.modelRegistry.getProviderAuthStatus(id)?.configured) ids.delete(id);

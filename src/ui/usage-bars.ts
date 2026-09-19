@@ -19,22 +19,38 @@ function codexCell(state: UsageState, display: string, match: (label: string) =>
   return row ? { label: display, remaining: row.remaining, resetAt: row.resetAt } : { label: display };
 }
 
-function buildColumns(state: UsageState, modelId?: string): { claude: Cell[]; codex: Cell[] } {
-  const scopes = scopedLabels(state.rows, modelId);
-  const claude: Cell[] = [
-    pooled(state, "5h") ?? { label: "5h" },
-    { ...(pooled(state, "7d") ?? { label: "7d" }), label: "weekly" },
-    ...scopes.map((scoped) => ({ ...(pooled(state, scoped) ?? { label: scoped }), label: scoped.replace("7d ", "") })),
-    ...(scopes.length ? [] : [{ label: "-" }]),
-  ];
-  claude[0] = { ...claude[0], label: "5h" };
+/**
+ * Turns a scoped limit id into something that fits the label column.
+ *
+ * Anthropic names these with an internal id, e.g.
+ * `7d claude-weekly-scoped-fable`. Rendered raw it was truncated to the 6
+ * column label width and came out as "claude", which named neither the window
+ * nor the model. The trailing segment is the model family, so that is what is
+ * shown.
+ */
+function scopedDisplayName(label: string): string {
+  const family = label.replace(/^7d\s+/, "").split("-").pop() ?? label;
+  return family.charAt(0).toUpperCase() + family.slice(1);
+}
 
+function buildColumns(state: UsageState, modelId?: string): { claude: Cell[]; codex: Cell[] } {
+  // Three fixed tiers, so the block keeps its shape whether or not a scoped
+  // limit is currently reported.
+  const scoped = scopedLabels(state.rows, modelId)[0];
+  const scopedCell = scoped
+    ? { ...(pooled(state, scoped) ?? { label: scoped }), label: scopedDisplayName(scoped) }
+    : { label: "Fable" };
+
+  const claude: Cell[] = [
+    { ...(pooled(state, "5h") ?? { label: "5h" }), label: "5h" },
+    { ...(pooled(state, "7d") ?? { label: "7d" }), label: "weekly" },
+    scopedCell,
+  ];
+
+  // Codex reports only the two windows; it has no scoped equivalent.
   const codex: Cell[] = [
     codexCell(state, "5h", (label) => label === "5h") ?? { label: "5h" },
     codexCell(state, "weekly", (label) => label === "weekly") ?? { label: "weekly" },
-    codexCell(state, "Spark", (label) => /spark/i.test(label) && label.endsWith("5h"))
-      ?? codexCell(state, "Spark", (label) => /spark/i.test(label))
-      ?? { label: "Spark" },
   ];
   return { claude, codex };
 }

@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { agentPath } from "../../core/store.ts";
 import { env, setEnv } from "../../core/env.ts";
-import { runSshCommand, shQuote } from "../../core/exec/process.ts";
+import { runSshCommand } from "../../core/exec/process.ts";
 import { readRemote } from "../remote/config-path.ts";
 
 /**
@@ -22,7 +22,6 @@ import { readRemote } from "../remote/config-path.ts";
  */
 
 const PID_FILE = "board-server.pid";
-const LOG_FILE = "board-server.log";
 const DEFAULT_PORT = 8787;
 
 function serverEntry(): string {

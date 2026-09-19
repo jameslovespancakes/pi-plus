@@ -61,6 +61,11 @@ export interface AccountProvider {
    * Optional: a provider that cannot suspend accounts simply omits it.
    */
   setEnabled?(accountId: string, enabled: boolean): Promise<void>;
+  /**
+   * Changes an account's display label. Credentials are untouched, so this is
+   * purely cosmetic and never needs a re-authorization.
+   */
+  rename?(accountId: string, label: string): Promise<void>;
   routing?: RoutingSupport;
 }
 

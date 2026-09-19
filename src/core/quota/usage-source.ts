@@ -1,7 +1,9 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { loadAccounts, refreshToken, saveAccount, type AnthropicAccount } from "../../vendor/anthropic.ts";
+import { loadAccounts, saveAccount, type Account as AnthropicAccount } from "../anthropic/store.ts";
+import { refreshToken } from "../anthropic/oauth.ts";
+import { loadCodexAccounts } from "../codex/store.ts";
 import type { UsageRow } from "./pool.ts";
 
 /**
@@ -89,8 +91,8 @@ async function fallbackAccountToken(account: AnthropicAccount): Promise<string |
   if (valid && account.access) return account.access;
   if (!account.refresh) return account.access;
 
-  const refreshed = await refreshToken(account.refresh, { maxRetries: 0, timeoutMs: TIMEOUT_MS });
-  await saveAccount({
+  const refreshed = await refreshToken({ refreshToken: account.refresh, maxRetries: 0 });
+  saveAccount({
     ...account,
     access: refreshed.access,
     refresh: refreshed.refresh,
@@ -98,6 +100,41 @@ async function fallbackAccountToken(account: AnthropicAccount): Promise<string |
     lastRefreshedAt: Date.now(),
   });
   return refreshed.access;
+}
+
+
+/**
+ * Builds usage rows from a stored quota snapshot.
+ *
+ * Snapshots are refreshed for free from response headers on every request, so
+ * serving the HUD from them avoids touching `/api/oauth/usage` at all. That
+ * endpoint rate limits aggressively, and /usage polling several accounts was a
+ * reliable way to get 429s and then show nothing.
+ *
+ * Returns undefined when there is no snapshot yet, so the caller can fetch.
+ */
+function rowsFromSnapshot(group: string, quota: any): UsageRow[] | undefined {
+  if (!quota) return undefined;
+  const rows: UsageRow[] = [];
+  const push = (label: string, window: any) => {
+    if (typeof window?.remainingPercent !== "number") return;
+    rows.push({
+      group,
+      label,
+      remaining: window.remainingPercent,
+      resetAt: resetToMs(window.resetsAt),
+      // Required: pool.isFresh discards any row without it, which would make
+      // every cached row pool as "n/a".
+      checkedAt: window.checkedAt ?? quota.checkedAt ?? Date.now(),
+    });
+  };
+  push("5h", quota.five_hour);
+  push("7d", quota.seven_day);
+  for (const scoped of Array.isArray(quota.scoped) ? quota.scoped : []) {
+    if (typeof scoped?.remainingPercent !== "number" || !scoped?.id) continue;
+    push(`7d ${scoped.id}`, scoped);
+  }
+  return rows.length ? rows : undefined;
 }
 
 export async function fetchClaudeRows(ctx: any): Promise<{ rows: UsageRow[]; errors: string[]; groups: string[] }> {
@@ -114,7 +151,7 @@ export async function fetchClaudeRows(ctx: any): Promise<{ rows: UsageRow[]; err
   }
 
   try {
-    const storage = await loadAccounts();
+    const storage = loadAccounts();
     for (const account of storage?.accounts ?? []) {
       if (account.type !== "oauth" || account.enabled === false) continue;
       accounts.push({ group: `Claude ${account.label ?? account.id.slice(0, 8)}`, account });
@@ -125,6 +162,13 @@ export async function fetchClaudeRows(ctx: any): Promise<{ rows: UsageRow[]; err
 
   for (const entry of accounts) {
     try {
+      // Cached snapshot first: it is free, current, and cannot be throttled.
+      const cached = rowsFromSnapshot(entry.group, entry.account?.quota);
+      if (cached) {
+        rows.push(...cached);
+        continue;
+      }
+
       const token = entry.token ?? (entry.account ? await fallbackAccountToken(entry.account) : undefined);
       if (!token) {
         errors.push(`${entry.group}: no token`);
@@ -136,7 +180,7 @@ export async function fetchClaudeRows(ctx: any): Promise<{ rows: UsageRow[]; err
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       errors.push(/invalid_grant/i.test(message)
-        ? `${entry.group}: login expired, run /account anthropic reauth ${entry.account?.label ?? entry.account?.id ?? ""}`.trim()
+        ? `${entry.group}: login expired, run /accounts reauth ${entry.account?.label ?? entry.account?.id ?? ""}`.trim()
         : `${entry.group}: ${message}`);
     }
   }
@@ -145,6 +189,12 @@ export async function fetchClaudeRows(ctx: any): Promise<{ rows: UsageRow[]; err
 }
 
 function codexAccountId(): string | undefined {
+  // Prefer an enabled account from our own pool, so /usage reflects the
+  // accounts /accounts manages rather than only pi's single credential.
+  try {
+    const pooled = loadCodexAccounts().accounts.find((a) => a.enabled !== false && a.accountId);
+    if (pooled?.accountId) return pooled.accountId;
+  } catch { /* fall through */ }
   try {
     const auth = JSON.parse(readFileSync(join(homedir(), ".pi", "agent", "auth.json"), "utf8"));
     const credential = auth["openai-codex"];

@@ -277,7 +277,6 @@ function ensureRepoThread(agent) {
   return row.id;
 }
 
-const deleteThread = (id) => q("DELETE FROM threads WHERE id=?").run(id);
 
 /**
  * Housekeeping. Every step is a single set-based statement; the previous
@@ -575,7 +574,7 @@ function onConnection(ws) {
         ws.close(4400, "sessionId required");
         return;
       }
-      active.set(sessionId, { ws, agent, activity: new Array(ACTIVITY_RING), cursor: 0, adminThreads: new Set() });
+      active.set(sessionId, { ws, agent, activity: Array.from({ length: ACTIVITY_RING }), cursor: 0, adminThreads: new Set() });
       markSeen(agent);
       const repoThread = ensureRepoThread(agent);
       push(active.get(sessionId), { t: "registered", ...coordination(agent), repoThread });

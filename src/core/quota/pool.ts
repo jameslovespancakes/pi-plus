@@ -8,7 +8,16 @@ export type UsageRow = {
   capacity?: number;
 };
 
-export const CLAUDE_FRESH_MS = 6 * 60_000;
+/*
+ * How old a usage sample may be and still be poolable.
+ *
+ * This was 6 minutes when every refresh fetched the usage endpoint live.
+ * Quota now comes from response headers, backed by a poll at most once per
+ * 10 minutes, so a 6 minute bound marked idle accounts stale almost all the
+ * time. It must stay comfortably above that poll interval; the underlying
+ * windows are 5 hours and 7 days, so a sample minutes old is still accurate.
+ */
+export const CLAUDE_FRESH_MS = 12 * 60_000;
 export const isClaudeAccount = (row: UsageRow) => row.group.startsWith("Claude ") && !row.group.startsWith("Claude pool ×");
 export const isFresh = (row: UsageRow, now = Date.now()) => !row.stale && !!row.checkedAt
   && now - row.checkedAt < CLAUDE_FRESH_MS && (!row.resetAt || row.resetAt > now);

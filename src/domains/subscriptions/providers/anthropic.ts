@@ -1,28 +1,38 @@
 import { randomUUID } from "node:crypto";
 import type { AccountContext, AccountProvider, ManagedAccount, RoutingMode } from "../../../core/accounts/registry.ts";
-import { core, loadAccounts, routingMode, saveAccount, setRoutingMode } from "../../../vendor/anthropic.ts";
+import { authorize, exchange } from "../../../core/anthropic/oauth.ts";
+import {
+  getRoutingMode,
+  loadAccounts,
+  saveAccount,
+  setRoutingMode,
+  type RoutingMode as StoreRoutingMode,
+} from "../../../core/anthropic/store.ts";
 
 /**
- * Anthropic adapter, adopted from @cortexkit/anthropic-auth-core.
+ * Anthropic adapter.
  *
- * pi itself holds one Anthropic credential; cortexkit keeps the additional
- * accounts in `anthropic-auth.json` and swaps tokens per request. Everything
- * provider-specific lives here so the `/account` and `/routing` commands stay
- * generic.
+ * pi itself holds one Anthropic credential; the additional accounts live in
+ * our own store and tokens are swapped per request. Everything
+ * provider-specific lives here so `/accounts` and `/routing` stay generic.
+ *
+ * This used to read through `vendor/anthropic.ts`, which loaded the cortexkit
+ * package. That package was removed when the provider was extracted, so every
+ * call here threw and the account list silently came back empty. It now uses
+ * the extracted store directly.
  */
 
-/** Our vocabulary maps onto cortexkit's routing modes. */
-const MODE_TO_VENDOR: Record<RoutingMode, string> = {
+/** The registry's vocabulary maps onto the store's routing modes. */
+const MODE_TO_STORE: Record<RoutingMode, StoreRoutingMode> = {
   standard: "main-first",
   optimal: "sticky-balanced",
 };
 
-function fromVendorMode(mode: string): RoutingMode {
+function fromStoreMode(mode: string): RoutingMode {
   return mode === "sticky-balanced" ? "optimal" : "standard";
 }
 
 async function authenticate(ctx: AccountContext): Promise<{ access: string; refresh: string; expires: number } | undefined> {
-  const { authorize, exchange } = await core();
   const auth = await authorize("max");
 
   try {
@@ -35,7 +45,9 @@ async function authenticate(ctx: AccountContext): Promise<{ access: string; refr
   if (!callback) return undefined;
 
   const result = await exchange(callback, auth.verifier, auth.redirectUri, auth.state);
-  if (result.type !== "success") throw new Error("Claude OAuth exchange failed");
+  if (result.type !== "success") {
+    throw new Error(`Claude OAuth exchange failed: ${result.reason}`);
+  }
   return { access: result.access, refresh: result.refresh, expires: result.expires };
 }
 
@@ -44,7 +56,7 @@ export const anthropicAccounts: AccountProvider = {
   label: "Claude",
 
   async list(): Promise<ManagedAccount[]> {
-    const storage = await loadAccounts();
+    const storage = loadAccounts();
     return (storage?.accounts ?? [])
       .filter((account) => account.type === "oauth")
       .map((account) => ({
@@ -66,7 +78,7 @@ export const anthropicAccounts: AccountProvider = {
     if (!result) return undefined;
 
     const now = Date.now();
-    await saveAccount({
+    saveAccount({
       id: randomUUID(),
       label,
       type: "oauth",
@@ -82,7 +94,7 @@ export const anthropicAccounts: AccountProvider = {
   },
 
   async reauth(ctx, accountId): Promise<string | undefined> {
-    const storage = await loadAccounts();
+    const storage = loadAccounts();
     const account = storage?.accounts.find(
       (candidate) => candidate.id === accountId || candidate.label === accountId,
     );
@@ -93,7 +105,7 @@ export const anthropicAccounts: AccountProvider = {
     const result = await authenticate(ctx);
     if (!result) return undefined;
 
-    await saveAccount({
+    saveAccount({
       ...account,
       access: result.access,
       refresh: result.refresh,
@@ -105,20 +117,27 @@ export const anthropicAccounts: AccountProvider = {
   },
 
   async setEnabled(accountId: string, enabled: boolean): Promise<void> {
-    const storage = await loadAccounts();
+    const storage = loadAccounts();
     const account = storage?.accounts.find((candidate) => candidate.id === accountId);
     if (!account) throw new Error(`Account “${accountId}” not found.`);
     // Credentials are preserved; only the eligibility flag changes, so a
     // disabled account can be re-enabled without another OAuth round trip.
-    await saveAccount({ ...account, enabled });
+    saveAccount({ ...account, enabled });
+  },
+
+  async rename(accountId: string, label: string): Promise<void> {
+    const account = loadAccounts()?.accounts.find((candidate) => candidate.id === accountId);
+    if (!account) throw new Error(`Account “${accountId}” not found.`);
+    saveAccount({ ...account, label });
   },
 
   routing: {
     async get(): Promise<RoutingMode> {
-      return fromVendorMode(await routingMode());
+      return fromStoreMode(getRoutingMode(loadAccounts()));
     },
     async set(mode: RoutingMode): Promise<RoutingMode> {
-      return fromVendorMode(await setRoutingMode(MODE_TO_VENDOR[mode] as "sticky-balanced" | "main-first"));
+      setRoutingMode(MODE_TO_STORE[mode]);
+      return mode;
     },
     describe(mode: RoutingMode): string {
       return mode === "optimal"

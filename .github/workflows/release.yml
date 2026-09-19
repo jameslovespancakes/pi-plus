@@ -13,6 +13,10 @@ concurrency:
 
 permissions:
   contents: write
+  # Lets the runner mint an OIDC token for npm trusted publishing. The npm CLI
+  # detects this automatically and prefers it over NPM_TOKEN, so the secret
+  # below becomes dead weight once a trusted publisher is configured.
+  id-token: write
 
 jobs:
   release:
@@ -24,15 +28,20 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # Node 24 ships npm 11.19; trusted publishing needs npm >= 11.5.1 and
+      # Node >= 22.14, and Node 22 only ships npm 10.9.
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
 
       - name: Install
         run: npm install --no-audit --no-fund
 
       # ---- gate: nothing publishes unless all of this passes ----
+      - name: Lint
+        run: npm run lint
+
       - name: Typecheck
         run: npm run typecheck
 
@@ -57,6 +66,14 @@ jobs:
           fi
 
       # ---- publish ----
+      # Authentication resolves in this order:
+      #   1. OIDC, once a trusted publisher is configured for this package on
+      #      npmjs.com. Nothing to store and nothing to expire.
+      #   2. NPM_TOKEN, which is only needed for the very first publish, since
+      #      a trusted publisher can only be attached to a package that already
+      #      exists.
+      # Keeping both means the migration needs no workflow change: configure
+      # the trusted publisher, confirm a green release, then revoke the token.
       - name: Publish to npm
         run: npm publish --access public
         env:

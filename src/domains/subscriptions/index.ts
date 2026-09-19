@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerAccountProvider } from "../../core/accounts/registry.ts";
 import { anthropicAccounts } from "./providers/anthropic.ts";
+import { codexAccounts } from "./providers/codex.ts";
 import { registerAnthropicProvider } from "./provider.ts";
 import { registerAccountCommands } from "./accounts.ts";
 import { registerRoutingCommands } from "./routing.ts";
@@ -29,6 +30,7 @@ import { registerFooter } from "./footer.ts";
 export default function subscriptions(pi: ExtensionAPI) {
   // Adapters register first so the generic commands can see them.
   registerAccountProvider(anthropicAccounts);
+  registerAccountProvider(codexAccounts);
 
   // Own the Anthropic provider unless explicitly told to defer to cortexkit.
   // PI_PLUS_VENDOR_ANTHROPIC=1 restores the vendored package.

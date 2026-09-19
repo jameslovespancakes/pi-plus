@@ -1,23 +1,23 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { accountRows, openAccountsPicker, type AccountState } from "./accounts-picker.ts";
 import {
   accountProvider,
   accountProviders,
   type AccountContext,
   type AccountProvider,
   type ManagedAccount,
-  type RoutingMode,
 } from "../../core/accounts/registry.ts";
 
 /**
- * `/account [provider] [add|reauth]` is provider-agnostic account management.
+ * `/accounts` is provider-agnostic subscription account management.
  *
- *   /account                    every provider and its accounts
- *   /account anthropic          that provider's accounts
- *   /account anthropic add      add one
- *   /account anthropic reauth   reauthorize (picker when the label is omitted)
+ *   /accounts          every provider's accounts, toggled enabled/disabled
+ *   /accounts add      pick a provider, name the account, authorize
+ *   /accounts reauth   reauthorize an existing account
  *
  * No provider-specific logic lives here; adapters are registered in
- * core/accounts/registry.ts.
+ * core/accounts/registry.ts, so a new provider is an adapter rather than a
+ * new command.
  */
 
 async function openBrowser(pi: ExtensionAPI, url: string): Promise<void> {
@@ -76,97 +76,7 @@ async function listAll(ctx: any): Promise<void> {
   ctx.ui.notify(blocks.join("\n"), "info");
 }
 
-type HubEntry =
-  | { kind: "routing"; provider: AccountProvider; mode: RoutingMode }
-  | { kind: "account"; provider: AccountProvider; account: ManagedAccount }
-  | { kind: "add"; provider: AccountProvider }
-  | { kind: "error" };
 
-async function buildHub(): Promise<{ labels: string[]; entries: HubEntry[] }> {
-  const labels: string[] = [];
-  const entries: HubEntry[] = [];
-
-  for (const provider of accountProviders()) {
-    let accounts: ManagedAccount[] = [];
-    try {
-      accounts = await provider.list();
-    } catch (error) {
-      labels.push(`${provider.label}: ${error instanceof Error ? error.message : String(error)}`);
-      entries.push({ kind: "error" });
-      continue;
-    }
-
-    if (provider.routing) {
-      const mode = await provider.routing.get();
-      labels.push(`${provider.label} · routing: ${mode}   (enter to switch)`);
-      entries.push({ kind: "routing", provider, mode });
-    } else {
-      labels.push(provider.label);
-      entries.push({ kind: "error" });
-    }
-
-    const width = Math.max(8, ...accounts.map((account) => account.label.length));
-    for (const account of accounts) {
-      const expired = account.expiresAt !== undefined && account.expiresAt < Date.now();
-      const state = !account.enabled ? "disabled" : expired ? "expired, needs reauth" : "active";
-      labels.push(`  [${account.enabled ? "✓" : " "}] ${account.label.padEnd(width)}  ${state}`);
-      entries.push({ kind: "account", provider, account });
-    }
-
-    labels.push(`  + Add ${provider.id} account…`);
-    entries.push({ kind: "add", provider });
-  }
-
-  return { labels, entries };
-}
-
-async function hub(pi: ExtensionAPI, ctx: any): Promise<void> {
-  for (;;) {
-    const { labels, entries } = await buildHub();
-    if (labels.length === 0) {
-      ctx.ui.notify("No account providers are registered.", "warning");
-      return;
-    }
-
-    const choice = await ctx.ui.select("Accounts", labels);
-    if (!choice) return;
-    const entry = entries[labels.indexOf(choice)];
-    if (!entry || entry.kind === "error") continue;
-
-    if (entry.kind === "routing") {
-      const next: RoutingMode = entry.mode === "optimal" ? "standard" : "optimal";
-      try {
-        await entry.provider.routing!.set(next);
-      } catch (error) {
-        ctx.ui.notify(`Could not change routing: ${error instanceof Error ? error.message : String(error)}`, "error");
-      }
-      continue;
-    }
-
-    if (entry.kind === "add") {
-      const label = await ctx.ui.input("Account label", "Work, Personal, etc.");
-      if (!label) continue;
-      try {
-        const added = await entry.provider.add(bridge(pi, ctx), label.trim());
-        if (added) ctx.ui.notify(`${entry.provider.label} account “${added}” added.`, "info");
-      } catch (error) {
-        ctx.ui.notify(`Could not add account: ${error instanceof Error ? error.message : String(error)}`, "error");
-      }
-      continue;
-    }
-
-    // Account row: toggle eligibility.
-    if (!entry.provider.setEnabled) {
-      ctx.ui.notify(`${entry.provider.label} does not support disabling accounts.`, "warning");
-      continue;
-    }
-    try {
-      await entry.provider.setEnabled(entry.account.id, !entry.account.enabled);
-    } catch (error) {
-      ctx.ui.notify(`Could not update account: ${error instanceof Error ? error.message : String(error)}`, "error");
-    }
-  }
-}
 
 async function pickAccount(ctx: any, provider: AccountProvider): Promise<string | undefined> {
   const accounts = await provider.list();
@@ -186,69 +96,124 @@ async function pickAccount(ctx: any, provider: AccountProvider): Promise<string 
 }
 
 export function registerAccountCommands(pi: ExtensionAPI): void {
-  pi.registerCommand("account", {
-    description: "Manage subscription accounts (/account <provider> [add|reauth])",
-    getArgumentCompletions: (prefix) => {
-      const parts = prefix.split(/\s+/);
-      if (parts.length <= 1) {
-        return accountProviders()
-          .map((provider) => provider.id)
-          .filter((id) => id.startsWith(parts[0] ?? ""))
-          .map((id) => ({ value: id, label: id }));
+  /** Toggles one account and returns the state it ended in. */
+  const toggle = (providerId: string, accountId: string): AccountState => {
+    const provider = accountProvider(providerId);
+    if (!provider?.setEnabled) throw new Error(`${providerId} accounts cannot be disabled.`);
+    const next = pendingState.get(`${providerId}:${accountId}`) === "enabled" ? "disabled" : "enabled";
+    pendingState.set(`${providerId}:${accountId}`, next);
+    // Adapters persist asynchronously; the picker needs the answer now, so the
+    // write is fired off and failures surface as a notification.
+    void provider.setEnabled(accountId, next === "enabled").catch(() => {});
+    return next;
+  };
+
+  /** Mirror of on-disk state, so the synchronous toggle can answer instantly. */
+  const pendingState = new Map<string, AccountState>();
+
+  const rows = async () => {
+    const list = await accountRows(accountProviders());
+    pendingState.clear();
+    for (const row of list) pendingState.set(row.id, row.state);
+    return list;
+  };
+
+  /** Adds an account: choose provider, name it, authorize. */
+  async function addAccount(ctx: any, providerId?: string): Promise<void> {
+    if (!ctx.hasUI) {
+      ctx.ui.notify("Adding an account requires interactive Pi mode.", "error");
+      return;
+    }
+
+    const providers = accountProviders();
+    if (providers.length === 0) {
+      ctx.ui.notify("No subscription providers are registered.", "error");
+      return;
+    }
+
+    let provider = providerId ? accountProvider(providerId) : undefined;
+    if (!provider) {
+      if (providers.length === 1) {
+        provider = providers[0];
+      } else {
+        const labels = providers.map((p) => `${p.label} (${p.id})`);
+        const picked = await ctx.ui.select("Add an account for which subscription?", labels);
+        if (!picked) return;
+        provider = providers[labels.indexOf(picked)];
       }
-      const action = parts[1] ?? "";
-      return ["add", "reauth"]
-        .filter((option) => option.startsWith(action))
-        .map((option) => ({ value: `${parts[0]} ${option}`, label: option }));
+    }
+    if (!provider) return;
+
+    const label = await ctx.ui.input(`${provider.label} account name`, "Work, Personal, etc.");
+    if (!label?.trim()) return;
+
+    try {
+      const added = await provider.add(bridge(pi, ctx), label.trim());
+      if (added) ctx.ui.notify(`${provider.label} account “${added}” added.`, "info");
+    } catch (error) {
+      ctx.ui.notify(`Could not add account: ${error instanceof Error ? error.message : String(error)}`, "error");
+    }
+  }
+
+  /** Rename wizard: pick an account, type a new name. */
+  async function renameAccount(ctx: any): Promise<void> {
+    if (!ctx.hasUI) {
+      ctx.ui.notify("Renaming an account requires interactive Pi mode.", "error");
+      return;
+    }
+    const list = await accountRows(accountProviders());
+    const renameable = list.filter((row) => accountProvider(row.providerId)?.rename);
+    if (renameable.length === 0) {
+      ctx.ui.notify("No accounts can be renamed.", "info");
+      return;
+    }
+
+    const labels = renameable.map((row) => `${row.providerLabel}  ${row.label}`);
+    const picked = await ctx.ui.select("Rename which account?", labels);
+    if (!picked) return;
+    const row = renameable[labels.indexOf(picked)];
+    if (!row) return;
+
+    const next = await ctx.ui.input("New name", row.label);
+    if (!next?.trim() || next.trim() === row.label) return;
+
+    const provider = accountProvider(row.providerId);
+    try {
+      // Row ids are "<providerId>:<accountId>"; strip the prefix.
+      await provider!.rename!(row.id.slice(row.providerId.length + 1), next.trim());
+      ctx.ui.notify(`Renamed to “${next.trim()}”.`, "info");
+    } catch (error) {
+      ctx.ui.notify(`Could not rename: ${error instanceof Error ? error.message : String(error)}`, "error");
+    }
+  }
+
+  pi.registerCommand("accounts", {
+    description: "Subscription accounts (/accounts [add|rename|reauth])",
+    getArgumentCompletions: (prefix) => {
+      const parts = prefix.trim().split(/\s+/).filter(Boolean);
+      if (parts.length <= 1) {
+        return ["add", "rename", "reauth"]
+          .filter((option) => option.startsWith(parts[0] ?? ""))
+          .map((option) => ({ value: option, label: option }));
+      }
+      return accountProviders()
+        .map((p) => p.id)
+        .filter((id) => id.startsWith(parts[1] ?? ""))
+        .map((id) => ({ value: `${parts[0]} ${id}`, label: id }));
     },
     handler: async (args, ctx) => {
-      const [providerId, action, ...rest] = args.trim().split(/\s+/).filter(Boolean);
+      const [action, providerId] = args.trim().split(/\s+/).filter(Boolean);
 
-      // Bare /account opens the toggle hub; headless sessions get plain text.
-      if (!providerId) return ctx.hasUI ? hub(pi, ctx) : listAll(ctx);
-
-      const provider = accountProvider(providerId);
-      if (!provider) {
-        const known = accountProviders().map((entry) => entry.id).join(", ") || "none";
-        ctx.ui.notify(`Unknown provider “${providerId}”. Available: ${known}`, "error");
-        return;
-      }
-
-      if (!action) {
-        const accounts = await provider.list();
-        const routing = provider.routing ? `\nrouting: ${await provider.routing.get()}` : "";
-        ctx.ui.notify(
-          (accounts.length > 0
-            ? accounts.map(describe).join("\n")
-            : `No additional ${provider.label} accounts. Add one with /account ${provider.id} add.`) + routing,
-          "info",
-        );
-        return;
-      }
-
-      const context = bridge(pi, ctx);
-
-      if (action === "add") {
-        if (!ctx.hasUI) {
-          ctx.ui.notify("Adding an account requires interactive Pi mode.", "error");
-          return;
-        }
-        const label = rest.join(" ") || await ctx.ui.input("Account label", "Work, Personal, etc.");
-        if (!label) return;
-        try {
-          const added = await provider.add(context, label.trim());
-          if (added) ctx.ui.notify(`${provider.label} account “${added}” added.`, "info");
-        } catch (error) {
-          ctx.ui.notify(`Could not add account: ${error instanceof Error ? error.message : String(error)}`, "error");
-        }
-        return;
-      }
+      if (action === "add") return addAccount(ctx, providerId);
+      if (action === "rename") return renameAccount(ctx);
 
       if (action === "reauth") {
-        const target = rest.join(" ") || await pickAccount(ctx, provider);
+        const provider = providerId ? accountProvider(providerId) : accountProviders()[0];
+        if (!provider) { ctx.ui.notify("No subscription providers are registered.", "error"); return; }
+        const target = await pickAccount(ctx, provider);
         if (!target) return;
         try {
-          const done = await provider.reauth(context, target);
+          const done = await provider.reauth(bridge(pi, ctx), target);
           if (done) ctx.ui.notify(`${provider.label} account “${done}” reauthorized.`, "info");
         } catch (error) {
           ctx.ui.notify(`Could not reauthorize: ${error instanceof Error ? error.message : String(error)}`, "error");
@@ -256,7 +221,22 @@ export function registerAccountCommands(pi: ExtensionAPI): void {
         return;
       }
 
-      ctx.ui.notify(`Unknown action “${action}”. Use: /account ${provider.id} [add|reauth]`, "warning");
+      if (action) {
+        ctx.ui.notify(`Unknown action “${action}”. Use: /accounts [add|rename|reauth]`, "warning");
+        return;
+      }
+
+      // Bare /accounts: the picker interactively, plain text headless.
+      if (!ctx.hasUI) return listAll(ctx);
+
+      // The picker closes to run a wizard, then reopens so the result is
+      // visible immediately. Bounded so a misbehaving action cannot spin.
+      for (let step = 0; step < 24; step++) {
+        const requested = await openAccountsPicker(ctx, { rows, toggle });
+        if (!requested) return;
+        if (requested.kind === "add") await addAccount(ctx);
+        else if (requested.kind === "rename") await renameAccount(ctx);
+      }
     },
   });
 }

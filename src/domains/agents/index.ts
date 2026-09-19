@@ -115,7 +115,8 @@ class BoardClient {
       } else if (value.t === "res") {
         const item = this.pending.get(value.id); if (!item) return;
         this.pending.delete(value.id); clearTimeout(item.timer);
-        value.ok ? item.resolve(value.data) : item.reject(new Error(value.error || "Board request failed"));
+        if (value.ok) item.resolve(value.data);
+        else item.reject(new Error(value.error || "Board request failed"));
       } else if (value.t === "message") this.emit(value);
     });
     const disconnected = () => {

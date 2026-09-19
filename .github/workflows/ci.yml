@@ -20,6 +20,11 @@ jobs:
       - name: Install
         run: npm install --no-audit --no-fund
 
+      # Lint first: it is the fastest gate and catches dead code that the
+      # typechecker accepts.
+      - name: Lint
+        run: npm run lint
+
       - name: Typecheck
         run: npm run typecheck
 

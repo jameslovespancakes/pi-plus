@@ -4,11 +4,13 @@ import {
   billingHeader, clientIdentityHeaders, firstUserText, prependPromptBlock, signRequestBody, splitSystemPrompt,
 } from "../../core/anthropic/client-identity.ts";
 import { ANTHROPIC_MODELS } from "../../core/anthropic/models.ts";
-import { QUOTA_FRESH_MS, refreshAllQuota } from "../../core/anthropic/quota.ts";
+import { applyQuotaHeaders, refreshAllQuota } from "../../core/anthropic/quota.ts";
+import { applyCodexQuotaHeaders } from "../../core/codex/quota.ts";
+import { loadCodexAccounts } from "../../core/codex/store.ts";
 import {
-  MAIN_ACCOUNT_ID, candidateWeight, familyForModel, selectAccount, type Candidate,
+  MAIN_ACCOUNT_ID, familyForModel, selectAccount, type Candidate,
 } from "../../core/anthropic/routing.ts";
-import { getRoutingMode, loadAccounts, saveAccount, type Account } from "../../core/anthropic/store.ts";
+import { getRoutingMode, loadAccounts, saveAccount } from "../../core/anthropic/store.ts";
 
 /**
  * The Anthropic provider.
@@ -45,7 +47,9 @@ export function lastRoutedAccount(): { id: string; at: number } | undefined {
  * Falls back to the primary token whenever routing has nothing better, so a
  * single-account setup behaves exactly as it did before any of this existed.
  */
-export function routeAccessToken(primary: string, modelId?: string, sessionId?: string): string {
+// `_sessionId` is accepted for signature compatibility with pi's per-request
+// hook; stickiness is derived from stored assignments rather than the id.
+export function routeAccessToken(primary: string, modelId?: string, _sessionId?: string): string {
   const storage = loadAccounts();
   if (!storage) return primary;
 
@@ -145,11 +149,71 @@ export function registerAnthropicProvider(pi: ExtensionAPI): void {
     return JSON.parse(signed);
   });
 
-  // Quota drives selection, so keep the snapshot warm out of band. Failures are
-  // silent by design: stale quota degrades routing, it does not break requests.
+  /**
+   * Free quota refresh for whichever account just served a request.
+   *
+   * Anthropic returns the same utilisation numbers as the usage endpoint in
+   * `anthropic-ratelimit-unified-*` response headers, so the active account
+   * stays current without spending a request on asking.
+   *
+   * `lastRoutedAccount()` is set by `getApiKey` immediately before the call,
+   * which is what lets the reply be attributed to the right account.
+   */
+  pi.on("after_provider_response", (event: any) => {
+    const routed = lastRoutedAccount();
+    // `main` lives in pi's auth.json, not in storage.accounts, so there is no
+    // per-account record to update for it.
+    if (!routed || routed.id === MAIN_ACCOUNT_ID) return;
+    try {
+      applyQuotaHeaders(routed.id, event?.headers);
+    } catch {
+      // Never let bookkeeping disturb a response.
+    }
+  });
+
+  /**
+   * The same trick for Codex, which reports usage as `x-codex-*` headers.
+   *
+   * Codex has no usage endpoint, so headers are the ONLY quota source: an
+   * account that is not serving traffic keeps whatever snapshot it last had.
+   * Attribution is by `chatgpt-account-id` on the request, since Codex
+   * requests carry the account explicitly rather than only in the token.
+   */
+  pi.on("after_provider_response", (event: any) => {
+    const headers = event?.headers;
+    if (!headers) return;
+    const hasCodexQuota = Object.keys(headers).some((k) => k.toLowerCase().startsWith("x-codex-"));
+    if (!hasCodexQuota) return;
+    try {
+      const sent = event?.request?.headers ?? {};
+      const accountId = sent["chatgpt-account-id"] ?? sent["Chatgpt-Account-Id"];
+      const match = loadCodexAccounts().accounts.find(
+        (a) => (accountId ? a.accountId === accountId : false) || a.enabled !== false,
+      );
+      if (match) applyCodexQuotaHeaders(match.id, headers);
+    } catch {
+      // Bookkeeping only.
+    }
+  });
+
+  /**
+   * Idle accounts still need polling, because routing compares accounts and
+   * response headers only ever refresh the one that served traffic.
+   *
+   * Triggered by sending a message, not by a timer, and `refreshAllQuota`
+   * skips accounts whose snapshot is still fresh. So the poll rate is at most
+   * once per QUOTA_FRESH_MS however fast messages are sent, and an idle
+   * session costs nothing at all. The previous 5 minute interval ran forever
+   * regardless of activity and was being answered with 429s.
+   *
+   * `input` is the per-message hook; `turn_start` would fire once per LLM
+   * response, which is many times per message in a tool-use loop.
+   */
+  pi.on("input", async () => {
+    void refreshAllQuota().catch(() => {});
+  });
+
   pi.on("session_start", async () => {
     void refreshAllQuota().catch(() => {});
-    const timer = setInterval(() => void refreshAllQuota().catch(() => {}), QUOTA_FRESH_MS);
-    timer.unref?.();
   });
 }
