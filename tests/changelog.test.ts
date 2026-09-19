@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { extractSection, promoteUnreleased } from "../scripts/changelog.mjs";
 
 const SAMPLE = `# Changelog
@@ -60,4 +61,40 @@ test("promoting an empty Unreleased throws", () => {
 
 test("a changelog with no Unreleased section throws", () => {
   assert.throws(() => promoteUnreleased("# Changelog\n\n## [1.0.0] - x\n\nold\n", "1.0.1"), /Unreleased/);
+});
+
+test("the real CHANGELOG is structurally sound", () => {
+  // A rebase once folded new entries into an already-released section,
+  // leaving that version with two "### Changed" blocks and an empty
+  // Unreleased. Both are silent until a release fails or ships wrong notes.
+  const real = readFileSync(new URL("../CHANGELOG.md", import.meta.url), "utf8");
+
+  const versions = [...real.matchAll(/^##\s+\[([^\]]+)\]/gm)].map((m) => m[1]);
+  assert.deepEqual(
+    versions.filter((v, i) => versions.indexOf(v) !== i),
+    [],
+    "each version heading appears exactly once",
+  );
+  assert.equal(versions[0], "Unreleased", "Unreleased leads the file");
+
+  for (const version of versions) {
+    const body = extractSection(real, version);
+    if (!body) continue;
+    const kinds = [...body.matchAll(/^###\s+(.+)$/gm)].map((m) => m[1].trim());
+    assert.deepEqual(
+      kinds.filter((k, i) => kinds.indexOf(k) !== i),
+      [],
+      `${version} must not repeat a change kind`,
+    );
+  }
+});
+
+test("every released version has a link reference", () => {
+  const real = readFileSync(new URL("../CHANGELOG.md", import.meta.url), "utf8");
+  for (const version of [...real.matchAll(/^##\s+\[(\d+\.\d+\.\d+)\]/gm)].map((m) => m[1])) {
+    // Plain string search: building this as a regex means escaping the dots
+    // and brackets, which is easy to get subtly wrong.
+    assert.ok(real.includes(`\n[${version}]: `),
+      `${version} needs a link reference at the foot of the file`);
+  }
 });

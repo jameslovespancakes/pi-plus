@@ -8,8 +8,6 @@ rolls into major at 10.
 
 ## [Unreleased]
 
-## [1.0.4] - 2026-09-19
-
 ### Changed
 
 - The README shows each interface as text rather than a screenshot. The blocks
@@ -21,6 +19,9 @@ rolls into major at 10.
 
 - The five demo screenshots. Only the project mark remains, which takes the
   published package from 489KB to 375KB.
+
+
+## [1.0.4] - 2026-09-19
 
 ### Changed
 
