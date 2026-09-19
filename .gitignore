@@ -17,3 +17,4 @@ config/anthropic-auth*.json
 
 # test scratch
 .tmp/
+.npmrc
