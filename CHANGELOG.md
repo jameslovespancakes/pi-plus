@@ -8,6 +8,14 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+### Removed
+
+- The published package no longer carries the changelog, the project mark, the
+  example config or internal provenance notes. It ships source, the board
+  server, the skill, the README and the licences, and nothing else.
+- `src/vendor/anthropic.ts`, a shim for the package that was removed when the
+  Anthropic provider was reimplemented here. Nothing had imported it since.
+
 ## [1.0.6] - 2026-09-19
 
 ### Fixed
