@@ -8,6 +8,8 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+## [1.0.9] - 2026-09-19
+
 ### Added
 
 - npm provenance. Each release is signed with the commit and workflow that
@@ -155,7 +157,8 @@ First published release.
   truncated to `claude` and named neither the window nor the model. They now
   show the model family, for example `Fable`.
 
-[Unreleased]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.8...HEAD
+[Unreleased]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.9...HEAD
+[1.0.9]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.8...v1.0.9
 [1.0.8]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.7...v1.0.8
 [1.0.7]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.6...v1.0.7
 [1.0.6]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.5...v1.0.6
