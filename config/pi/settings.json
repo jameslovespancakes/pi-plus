@@ -3,10 +3,7 @@
   "theme": "dark",
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-6-astra",
-  "packages": [
-    "npm:pi-workflow-engine",
-    "npm:@cortexkit/pi-anthropic-auth"
-  ],
+  "packages": [],
   "retry": {
     "enabled": false,
     "maxRetries": 5,

@@ -2,43 +2,15 @@ import { createHash, randomUUID } from "node:crypto";
 import { xxhash64 } from "./xxhash64.ts";
 
 /**
- * Claude Code client identity headers.
- *
- * ---------------------------------------------------------------------------
- * READ THIS BEFORE CHANGING ANYTHING HERE
- *
- * These headers make a request indistinguishable from Anthropic's official
- * Claude Code CLI. Without them Anthropic classifies the caller as a
- * third-party app and answers:
- *
- *   "Third-party apps now draw from your extra usage, not your plan limits."
- *
- * So the purpose of this file is to bill against plan limits rather than extra
- * usage. That is plausibly contrary to Anthropic's intent as stated in that
- * message, and the exposure falls on the account owner.
- *
- * It is isolated in one file, and referenced from exactly one place, so it can
- * be deleted or replaced without touching the rest of the provider. Removing it
- * does not break anything: requests keep working and bill to extra usage.
- *
- * Ported from @cortexkit/anthropic-auth-core during extraction.
- * ---------------------------------------------------------------------------
+ * Emulates Claude Code so OAuth requests use plan limits instead of extra usage.
+ * This may conflict with Anthropic's stated intent; remove this identity from
+ * the provider to opt out. Adapted from @cortexkit/anthropic-auth-core.
  */
 
 /** Pinned to the Claude Code release being imitated. */
 export const CLAUDE_CODE_VERSION = "2.1.258";
 
-/**
- * Anti-tamper checksum, replicated from the official client.
- *
- * The real CLI signs the serialised request body with xxHash64 under a fixed
- * seed and writes the low 20 bits into a `cch=` placeholder. Anthropic added
- * this so a client cannot simply assert it is Claude Code in a header: it has
- * to prove it by producing a value derived from the request itself.
- *
- * The salt and sample positions are constants in the official bundle, not
- * derivable from anything, and they will change when the CLI is updated.
- */
+/** Claude Code checksum constants. They can change between CLI releases. */
 const CCH_SEED = 0x4d659218e32a3268n;
 const CCH_SALT = "59cf53e54c78";
 const CCH_POSITIONS = [4, 7, 20];
@@ -147,15 +119,7 @@ function hasFullAgentShape(body: any): boolean {
     && !!body?.thinking && typeof body.thinking === "object";
 }
 
-/**
- * Paragraphs containing this anchor cannot sit in the top-level `system` array.
- *
- * Two lines of pi's documentation paragraph are each independently sufficient to
- * make Anthropic answer 400 "Third-party apps now draw from your extra usage".
- * The same text is accepted inside `messages`, so it is moved there. Confirmed
- * by bisection: the identical payload returns 200 with the paragraph removed and
- * 400 with it present, and entry count and payload size are not the factors.
- */
+/** Documentation paragraphs must move from `system` into `messages`. */
 const DOCS_ANCHOR = "Pi documentation";
 
 /** Lone surrogates are invalid UTF-8 and are rejected outright. */
@@ -163,14 +127,7 @@ function sanitizePrompt(text: string): string {
   return text.replace(/[\uD800-\uDFFF]/gu, "\uFFFD");
 }
 
-/**
- * Splits pi's system prompt into what may stay in `system` and what must move
- * into the first user message.
- *
- * An unrecognised prompt shape (no docs paragraph found) is moved whole, the
- * same conservative fallback the vendor uses: better to shift the entire prompt
- * into messages than to guess and trigger the 400.
- */
+/** Splits the system prompt, moving unknown shapes conservatively. */
 export function splitSystemPrompt(prompt: string): { systemText?: string; messageText: string } {
   const paragraphs = sanitizePrompt(prompt).split(/\n\n+/);
   const docs = paragraphs.filter((p) => p.includes(DOCS_ANCHOR));
@@ -183,15 +140,7 @@ export function splitSystemPrompt(prompt: string): { systemText?: string; messag
   };
 }
 
-/**
- * Inserts text as its own cache-controlled block ahead of the first user
- * message.
- *
- * A separate block rather than merged text, so the cache prefix ends before the
- * user's own words and a new conversation with a different first message still
- * reads this from cache. `cache_control` is explicit because the message-level
- * breakpoint elsewhere only covers the last user message.
- */
+/** Prepends a cache-controlled block to the first user message. */
 export function prependPromptBlock(messages: any[], text: string): void {
   const firstUser = (messages ?? []).find((m) => m?.role === "user");
   if (!firstUser || !text) return;
@@ -213,16 +162,12 @@ export function selectBetas(body: unknown, extra: string[] = []): string {
   return [...new Set(selected)].join(",");
 }
 
-/**
- * Headers presenting this client as Claude Code.
- * Merged over whatever pi already set.
- */
+/** Headers presenting this client as Claude Code. */
 export function clientIdentityHeaders(body?: unknown, existingBetas?: string): Record<string, string> {
   const incoming = (existingBetas ?? "").split(",").map((b) => b.trim()).filter(Boolean);
   return {
     "user-agent": USER_AGENT,
-    // Required: pi's Anthropic client reads this header to decide which betas
-    // to send, then puts them in the body's `betas` field.
+    // Pi copies this header into the request body's betas field.
     "anthropic-beta": selectBetas(body, incoming),
     "anthropic-version": "2023-06-01",
     "anthropic-dangerous-direct-browser-access": "true",

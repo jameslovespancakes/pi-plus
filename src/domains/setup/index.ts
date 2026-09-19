@@ -35,37 +35,37 @@ async function inspect(ctx: any): Promise<Feature[]> {
 
   /* subscriptions */
   const providers = accountProviders();
-  const accountSummary: string[] = [];
-  let anySignedIn = false;
-  for (const provider of providers) {
-    // pi holds the primary credential itself; the adapter only knows about the
-    // extra pooled accounts. Being signed in at all is what makes this usable.
-    let primary = false;
+  const accountStates = await Promise.all(providers.map(async (provider) => {
+    const primaryAuth = Promise.resolve()
+      .then(() => ctx.modelRegistry.getProviderAuth(provider.id))
+      .then((result: any) => !!result?.auth?.apiKey)
+      .catch(() => false);
     try {
-      primary = !!(await ctx.modelRegistry.getProviderAuth(provider.id))?.auth?.apiKey;
-    } catch { /* provider not configured */ }
-
-    try {
-      const accounts = await provider.list();
-      const routing = provider.routing ? await provider.routing.get() : "n/a";
+      const [primary, accounts, routing] = await Promise.all([
+        primaryAuth,
+        provider.list(),
+        provider.routing?.get(),
+      ]);
+      const signedIn = primary || accounts.length > 0;
       const pooled = accounts.length + (primary ? 1 : 0);
-      anySignedIn ||= primary || accounts.length > 0;
-      accountSummary.push(
-        primary || accounts.length > 0
-          ? `${provider.id}: ${pooled} account(s), routing=${routing}`
+      return {
+        signedIn,
+        summary: signedIn
+          ? `${provider.id}: ${pooled} account(s), routing=${routing ?? "n/a"}`
           : `${provider.id}: not signed in`,
-      );
+      };
     } catch {
-      accountSummary.push(`${provider.id}: unreadable`);
+      return { signedIn: await primaryAuth, summary: `${provider.id}: unreadable` };
     }
-  }
+  }));
+  const anySignedIn = accountStates.some((state) => state.signedIn);
   features.push({
     name: "Subscriptions",
     ready: anySignedIn,
-    detail: accountSummary.join("; ") || "no account providers registered",
-    commands: ["/account", "/account <provider> add", "/routing standard|optimal", "/usage"],
-    setup: anySignedIn ? undefined : "/account anthropic add",
-    open: "/account",
+    detail: accountStates.map((state) => state.summary).join("; ") || "no account providers registered",
+    commands: ["/accounts", "/accounts add <provider>", "/routing standard|optimal", "/usage"],
+    setup: anySignedIn ? undefined : "/accounts add anthropic",
+    open: "/accounts",
   });
 
   /* benchmarks */

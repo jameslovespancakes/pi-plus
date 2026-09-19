@@ -2,15 +2,7 @@ import { agentPath, readJson, writeJson } from "../core/store.ts";
 import { isClaudeAccount, type UsageRow } from "../core/quota/pool.ts";
 import { fetchAll } from "../core/quota/usage-source.ts";
 
-/**
- * The single owner of subscription usage state.
- *
- * Previously the only poller lived inside the footer extension and was gated on
- * `ctx.hasUI`, so `list_models` silently read empty rows whenever the footer was
- * hidden or the session was headless (including every workflow subagent).
- * Consumers now call `ensureFresh()` for on-demand data and `subscribe()` for
- * push updates; only one poll is ever in flight regardless of consumer count.
- */
+/** Shared subscription-usage cache and poller. */
 
 export const REFRESH_MS = 5 * 60 * 1000;
 const MIN_INTERVAL_MS = 90_000;
@@ -24,11 +16,7 @@ export interface UsageState {
   loading: boolean;
   accounts: number;
   codexPlan?: string;
-  /**
-   * Last time each account group's quota was observed to drop. This is the only
-   * available proxy for "recently used": providers expose remaining quota but
-   * never report which account served a request.
-   */
+  /** Last observed quota drop for each account group. */
   lastUsedAt?: Record<string, number>;
 }
 
@@ -77,10 +65,7 @@ function emit(): void {
   }
 }
 
-/**
- * Stamps an account as recently used when its headline window falls. A rise
- * (quota reset) or an unchanged figure is not a usage signal.
- */
+/** Records use when an account's headline quota falls. */
 function recordUsageDrops(fresh: UsageRow[]): void {
   const previous = new Map(
     state.rows.filter((row) => row.label === "5h").map((row) => [row.group, row.remaining]),
@@ -98,10 +83,7 @@ export function usageState(): UsageState {
   return state;
 }
 
-/**
- * Account groups ordered by most recent observed use, capped at `limit`.
- * Accounts never seen in use fall back to alphabetical, so the list is stable.
- */
+/** Returns recently used account groups with stable fallback ordering. */
 export function recentAccounts(limit: number): string[] {
   const stamps = state.lastUsedAt ?? {};
   const groups = [...new Set(state.rows.filter(isClaudeAccount).map((row) => row.group))];
@@ -116,10 +98,7 @@ export function subscribe(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
-/**
- * The endpoints are rate limited, so results are cached and refreshes are
- * throttled. Failures keep the previous figures on screen.
- */
+/** Refreshes cached usage without overlapping requests. */
 export async function refreshUsage(ctx: any, force = false): Promise<void> {
   if (inFlight) return inFlight;
   const now = Date.now();
@@ -160,10 +139,7 @@ export async function refreshUsage(ctx: any, force = false): Promise<void> {
   return inFlight;
 }
 
-/**
- * Guarantees usable data for a caller that does not own the poll loop.
- * This is what makes `list_models` correct in headless sessions.
- */
+/** Refreshes stale data for UI and headless callers. */
 export async function ensureFresh(ctx: any): Promise<UsageState> {
   const stale = !state.updatedAt || Date.now() - state.updatedAt > REFRESH_MS;
   if (stale) await refreshUsage(ctx);

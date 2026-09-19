@@ -2,14 +2,7 @@ import type { Component } from "@earendil-works/pi-tui";
 import { hasTruecolor, levelColor } from "../../ui/format.ts";
 import type { AccountProvider, ManagedAccount } from "../../core/accounts/registry.ts";
 
-/**
- * The `/accounts` list.
- *
- * Mirrors the provider picker: an inline SettingsList inside pi's own rule
- * chrome, toggled in place so nothing redraws the screen. Rows are grouped by
- * provider, because an account label alone ("Personal") does not say which
- * subscription it belongs to.
- */
+/** Inline account picker grouped by provider. */
 
 export type AccountState = "enabled" | "disabled";
 
@@ -36,28 +29,25 @@ export interface AccountRow {
   detail?: string;
 }
 
-/** Flattens every provider's accounts into one ordered list. */
+/** Flattens provider accounts while loading providers in parallel. */
 export async function accountRows(providers: AccountProvider[]): Promise<AccountRow[]> {
-  const rows: AccountRow[] = [];
-  for (const provider of providers) {
-    let accounts: ManagedAccount[] = [];
+  const groups = await Promise.all(providers.map(async (provider) => {
+    let accounts: ManagedAccount[];
     try {
       accounts = await provider.list();
     } catch {
-      continue; // A provider that cannot enumerate is simply not shown.
+      return [];
     }
-    for (const account of accounts) {
-      rows.push({
-        id: `${provider.id}:${account.id}`,
-        providerId: provider.id,
-        providerLabel: provider.label,
-        label: account.label,
-        state: account.enabled ? "enabled" : "disabled",
-        detail: account.primary ? "primary" : undefined,
-      });
-    }
-  }
-  return rows;
+    return accounts.map((account) => ({
+      id: `${provider.id}:${account.id}`,
+      providerId: provider.id,
+      providerLabel: provider.label,
+      label: account.label,
+      state: account.enabled ? "enabled" as const : "disabled" as const,
+      detail: account.primary ? "primary" : undefined,
+    }));
+  }));
+  return groups.flat();
 }
 
 function labelFor(theme: any, row: AccountRow): string {
@@ -79,13 +69,7 @@ function framed(theme: any, list: any, title: string): Component {
   } as Component;
 }
 
-/**
- * What closing the picker asked for.
- *
- * The wizards run AFTER the picker closes rather than inside it, so they can
- * use pi's ordinary select/input prompts instead of being reimplemented as
- * nested TUI components.
- */
+/** Wizard requested when the picker closes. */
 export type PickerAction = { kind: "add" } | { kind: "rename" } | undefined;
 
 /** Action row ids are namespaced so they cannot collide with an account id. */
@@ -94,8 +78,7 @@ const RENAME_ID = "__action_rename";
 
 export interface AccountPickerDeps {
   rows: () => Promise<AccountRow[]>;
-  /** Applies a toggle and returns the resulting state. Synchronous so the
-   *  label, dot and value all change in one render. */
+  /** Applies a toggle synchronously for one-render updates. */
   toggle: (providerId: string, accountId: string) => AccountState;
 }
 
@@ -118,9 +101,7 @@ export async function openAccountsPicker(ctx: any, deps: AccountPickerDeps): Pro
       description: row.detail,
     }));
 
-    // Actions live as rows rather than hidden keystrokes, so they are
-    // discoverable. A single-entry `values` makes Enter fire onChange without
-    // the row appearing to cycle through anything.
+    // Single-value action rows trigger onChange without cycling.
     items.push({
       id: ADD_ID,
       label: theme.fg("accent", "+ Add account"),

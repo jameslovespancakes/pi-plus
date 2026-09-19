@@ -48,12 +48,13 @@ Nothing else is required, every feature configures itself from within pi.
 
 ### Pool every subscription
 
-Add all the Claude accounts you own. pi-plus balances sessions across them by
-**remaining quota and time-to-reset**, keeps caches sticky, and migrates only on
-confirmed exhaustion.
+Add multiple Claude, ChatGPT/Codex, Kimi Code, or xAI/Grok accounts. pi-plus
+keeps credentials separate, refreshes them safely, and supports standard or
+optimal routing.
 
 ```
-/account anthropic add work
+/accounts add anthropic work
+/accounts add kimi-coding personal
 /routing optimal
 ```
 
@@ -70,9 +71,8 @@ Your live quota, always in the footer:
 With more than two accounts only the two most recently used are listed, so the
 footer stays a fixed height however many you pool.
 
-Account and routing commands are provider-agnostic: they dispatch through an
-adapter registry, so a second provider is one adapter, not a new command
-surface. Anthropic ships today.
+Account and routing commands are provider-agnostic. Anthropic balances by
+remaining quota and reset time; other providers use a rotating OAuth pool.
 
 ### Pick models on evidence
 
@@ -153,6 +153,23 @@ across every running pi agent. `/board` opens the messaging view:
 any Mac or Linux host over SSH, where launchd or systemd brings it back after a
 reboot.
 
+### Orchestrate repeatable workflows
+
+The built-in workflow engine runs named or inline multi-agent workflows with
+optional concurrency limits, replay, background runs, worktree isolation, progress,
+and usage accounting. `code-review`, `diagnose`, `perf-review`,
+`refactor-scout`, and `research` ship in this package—no external workflow
+package is installed.
+
+```
+/workflow code-review HEAD~3
+/workflow research "Compare the current provider implementations"
+```
+
+The `workflow` tool exposes the same engine to the model. Runs have no agent,
+timeout, submission, or token-budget limit by default; set limits explicitly
+with workflow options when a task needs them.
+
 ---
 
 ## Commands
@@ -161,9 +178,9 @@ reboot.
 | --- | --- |
 | `/pi-plus` | status modal for every feature |
 | `/pi-plus help` | model explains the pack and what is missing |
-| `/account` | account hub: toggle, add, reauth, switch routing |
-| `/account <provider> add [label]` | add a subscription |
-| `/account <provider> reauth [label]` | reauthorize one |
+| `/accounts` | account hub: toggle, add, reauth, switch routing |
+| `/accounts add <provider> [label]` | add a subscription |
+| `/accounts reauth <provider> [label]` | reauthorize one |
 | `/routing standard \| optimal` | main-first, or balance by quota |
 | `/usage [on\|off\|text]` | quota bars |
 | `/models [sort]` | ranked catalog |
@@ -176,9 +193,11 @@ reboot.
 | `/remote add \| rename \| remove` | jump to one step |
 | `/board` | live agent board UI |
 | `/board setup \| restart \| clear \| status` | manage the board server |
+| `/workflow` | open the running workflow agent board |
+| `/workflow <name> [args]` | run a bundled workflow |
 
-**Tools available to the agent:** `list_models`, `agent_board`, `remote_status`,
-`remote_test`.
+**Tools available to the agent:** `workflow`, `list_models`, `agent_board`,
+`remote_status`, `remote_test`.
 
 ---
 
@@ -213,13 +232,13 @@ src/
               usage-service, the single quota poller
   ui/         dumb render primitives: format · usage-bars
   domains/    one pi extension entry each
-              setup · subscriptions · models · agents · remote
-  vendor/     anthropic.ts, the only file importing @cortexkit/*
-server/       the agent board server, one file and one dependency (ws)
+              setup · subscriptions · models · workflows · agents · remote
+server/       agent board server
+config/       example settings and bundled skills
 ```
 
 ```sh
-npm install && npm run verify   # typecheck + 106 tests
+npm install && npm run verify   # lint + type check + tests
 ```
 
 ---
@@ -232,6 +251,10 @@ pi-plus is a thin layer over other people's work.
 | --- | --- | --- |
 | [`pi`](https://pi.dev/) | the host agent and the entire extension API | MIT |
 | [`xxhash-wasm`](https://github.com/jungomi/xxhash-wasm) | vendored into `src/core/anthropic/vendor/` for the billing checksum | MIT |
+| [`pi-workflow-engine`](https://github.com/timbrinded/pi-workflow-engine) | embedded workflow runtime and built-in workflows | MIT |
+
+The workflow engine keeps its upstream license in
+[`src/domains/workflows/LICENSE.md`](src/domains/workflows/LICENSE.md).
 
 The Anthropic provider, OAuth, quota and routing were originally adopted from
 [`@cortexkit/pi-anthropic-auth`](https://github.com/cortexkit/anthropic-auth)

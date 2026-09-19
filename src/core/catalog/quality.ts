@@ -82,7 +82,15 @@ interface QualityStore {
 }
 
 let cache: QualityStore | undefined;
+let cachedRecords: QualityRecord[] = [];
 let inFlight: Promise<string[]> | undefined;
+const lookupCache = new Map<string, QualityLookup>();
+
+function setCache(next: QualityStore): void {
+  cache = next;
+  cachedRecords = Object.values(next.records);
+  lookupCache.clear();
+}
 
 function agentDir(): string {
   return process.env.PI_AGENT_DIR ?? join(homedir(), ".pi", "agent");
@@ -119,18 +127,18 @@ function loadCache(): void {
     const parsed = JSON.parse(readFileSync(cachePath(), "utf8")) as QualityStore & { fetchedAt?: number };
     if (!parsed?.records) return;
     // Migrate the pre-store format, which only had `fetchedAt`.
-    cache = {
+    setCache({
       records: parsed.records,
       checkedAt: parsed.checkedAt ?? parsed.fetchedAt,
       lastModified: parsed.lastModified,
       etag: parsed.etag,
       source: parsed.source ?? "artificial-analysis",
-    };
+    });
   } catch { /* first run */ }
 }
 
 function persist(next: QualityStore): void {
-  cache = next;
+  setCache(next);
   try {
     writeFileSync(cachePath(), JSON.stringify(next), "utf8");
   } catch { /* cache write is best effort */ }
@@ -289,26 +297,36 @@ export interface QualityLookup {
  */
 export function qualityFor(modelId: string, thinkingLevel?: string): QualityLookup {
   loadCache();
+  const key = `${modelId}\0${thinkingLevel ?? ""}`;
+  const cached = lookupCache.get(key);
+  if (cached) return cached;
+
   const records = cache?.records ?? {};
   const base = normalizeSlug(modelId);
-
   const levelled = thinkingLevel && thinkingLevel !== "off" ? records[`${base}-${thinkingLevel}`] : undefined;
-  if (levelled) return { record: levelled, efficiency: costEfficiency(levelled), confidence: "measured", basis: levelled.slug };
-
   const exact = records[base];
-  if (exact) return { record: exact, efficiency: costEfficiency(exact), confidence: "measured", basis: exact.slug };
+  let result: QualityLookup;
 
-  let best: QualityRecord | undefined;
-  for (const record of Object.values(records)) {
-    if (!base.includes(record.slug) && !record.slug.includes(base)) continue;
-    if (!best || record.slug.length > best.slug.length) best = record;
+  if (levelled) {
+    result = { record: levelled, efficiency: costEfficiency(levelled), confidence: "measured", basis: levelled.slug };
+  } else if (exact) {
+    result = { record: exact, efficiency: costEfficiency(exact), confidence: "measured", basis: exact.slug };
+  } else {
+    let best: QualityRecord | undefined;
+    for (const record of cachedRecords) {
+      if (!base.includes(record.slug) && !record.slug.includes(base)) continue;
+      if (!best || record.slug.length > best.slug.length) best = record;
+    }
+    result = best
+      ? { record: best, efficiency: costEfficiency(best), confidence: "inferred", basis: `nearest match ${best.slug}` }
+      : { efficiency: {}, confidence: "unrated", basis: "no Artificial Analysis entry" };
   }
-  if (best) return { record: best, efficiency: costEfficiency(best), confidence: "inferred", basis: `nearest match ${best.slug}` };
 
-  return { efficiency: {}, confidence: "unrated", basis: "no Artificial Analysis entry" };
+  lookupCache.set(key, result);
+  return result;
 }
 
 export function allRecords(): QualityRecord[] {
   loadCache();
-  return Object.values(cache?.records ?? {});
+  return [...cachedRecords];
 }

@@ -8,14 +8,32 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+### Added
+
+- Multi-account OAuth pools for Kimi Code and xAI/Grok, with duplicate checks,
+  refresh handling, account labels, enable controls, and standard or optimal
+  routing.
+- An embedded workflow engine with background runs, replay, worktree isolation,
+  progress and usage reporting, plus five built-in workflows.
+- A clickable workflow agent board with per-agent activity, chat logs, and targeted follow-ups.
+
 ### Changed
 
-- Releases are opt-in. Every push to main used to publish a version, which
-  produced eleven of them in an afternoon. A release now needs `[release]` in
-  the commit message or a manual run from the Actions tab.
-- CI runs on every push including main, since it is now the only check on an
-  ordinary push, and the badge tracks it again.
-- The package description is just "pi and more".
+- Releases require an explicit `--release` commit marker or manual `--release` confirmation.
+  Release notes now include every commit since the previous release.
+- Workflow and OAuth account storage now ship directly in pi-plus instead of
+  external pi packages.
+- `/workflow` opens the currently running workflow as a modal agent board.
+  Named workflows still run with `/workflow <name>`, and run limits are opt-in.
+- Account lists load providers in parallel, model-quality lookups are cached,
+  and footer usage totals are reused until the session changes.
+- Shared JSON writes create parent directories and clean up temporary files.
+- CI steps and comments use shorter, consistent names.
+- The package description is now "pi and more".
+
+### Fixed
+
+- Anthropic request rewriting now ignores non-Anthropic provider payloads.
 
 ## [1.0.11] - 2026-09-19
 

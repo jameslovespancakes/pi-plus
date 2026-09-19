@@ -1,0 +1,38 @@
+import { serializeReviewIssue, type ReviewIssue } from "./review-issues.ts";
+import type { ReviewContext } from "./review-report.ts";
+import { serializeReviewContext } from "./review-report.ts";
+
+export function buildCommentHandoffPrompt(
+  issues: readonly ReviewIssue[],
+  context: ReviewContext | undefined,
+  verifiedHead: string,
+  reason: string,
+): string {
+  return `Use the workflow-code-review-actions skill if available.
+
+Mode: post inline GitHub PR comments for selected code-review findings.
+
+Fallback reason: ${reason}
+
+Selected findings JSON:
+\`\`\`json
+${JSON.stringify(toHandoffPayload(issues, context))}
+\`\`\`
+
+Instructions:
+- Do not edit files or make code changes.
+- Prefer installed GitHub MCP/tools if present; otherwise use the GitHub CLI (gh).
+- Before posting, resolve the current PR head and require it to equal the verified reviewed head \`${verifiedHead}\`; stop if it differs.
+- With gh, resolve the PR using \`gh pr view\` and \`gh repo view\`, then call \`gh api repos/{owner}/{repo}/pulls/{number}/comments\` with \`commit_id\`, \`path\`, \`line\`, and \`side=RIGHT\`.
+- Do not post duplicate comments.
+- Do not post line-less findings as inline comments.
+- Ask the user if the upstream PR cannot be identified.
+- Summarize posted, skipped, and failed comments when done.`;
+}
+
+function toHandoffPayload(issues: readonly ReviewIssue[], context: ReviewContext | undefined) {
+  return {
+    context: serializeReviewContext(context),
+    issues: issues.map(serializeReviewIssue),
+  };
+}

@@ -1,12 +1,16 @@
 name: Release
 
-# Releases are deliberate, not automatic. Trigger one by running this workflow
-# from the Actions tab, or by putting [release] in a commit message on main.
-# Ordinary pushes only run CI.
+# Publishing requires an explicit --release marker or manual confirmation.
 on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      release:
+        description: Type --release to confirm
+        required: true
+        default: ""
+        type: string
 
 concurrency:
   group: release
@@ -14,159 +18,142 @@ concurrency:
 
 permissions:
   contents: write
-  # Publishing the same release to GitHub Packages, which is what populates
-  # the repository's Packages sidebar.
   packages: write
-  # Lets the runner mint an OIDC token for npm trusted publishing. The npm CLI
-  # detects this automatically and prefers it over NPM_TOKEN, so the secret
-  # becomes unnecessary once a trusted publisher is configured.
   id-token: write
 
 jobs:
-  # Gate. Reuses the CI workflow verbatim so "verified" means exactly the same
-  # thing on a pull request as it does on a release, and cannot drift.
   verify:
-    # Deliberately unnamed: GitHub prefixes the reusable workflow's own job
-    # name with this one, and naming both renders it twice.
     if: >-
-      github.event_name == 'workflow_dispatch'
-      || contains(github.event.head_commit.message, '[release]')
+      (github.event_name == 'push' && contains(github.event.head_commit.message, '--release'))
+      || (github.event_name == 'workflow_dispatch' && inputs.release == '--release')
     uses: ./.github/workflows/ci.yml
 
   publish:
-    name: Publish to npm
-    # Structural gate, not just step ordering: this job cannot start unless
-    # every check above succeeded.
+    name: Publish Release
     needs: verify
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - name: Check Out Full History
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Node 24 ships npm 11.19; trusted publishing needs npm >= 11.5.1 and
-      # Node >= 22.14, and Node 22 only ships npm 10.9.
-      - uses: actions/setup-node@v5
+      - name: Set Up Node
+        uses: actions/setup-node@v5
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
-      - name: Install
+      - name: Install Dependencies
         run: npm install --no-audit --no-fund
 
-      - name: Bump version
+      - name: Calculate Version
         id: bump
         run: node scripts/bump-version.mjs
 
-      # Retitles "## [Unreleased]" as the new version and emits it as the
-      # release notes. The version is only known after the bump, so entries are
-      # written under Unreleased and promoted here.
-      - name: Promote the CHANGELOG entry
+      - name: Promote Changelog
         run: |
           if ! node scripts/changelog.mjs --promote "${{ steps.bump.outputs.to }}" > /tmp/notes.md; then
-            echo "::error::Nothing under ## [Unreleased] in CHANGELOG.md. Describe the change there before releasing."
+            echo "::error::Add release notes under ## [Unreleased] in CHANGELOG.md."
             exit 1
           fi
-          echo "Release notes:"; cat /tmp/notes.md
 
-      - name: Abort if the version already exists on npm
+      - name: Collect Changes Since Last Release
+        id: changes
+        shell: bash
+        run: |
+          PREVIOUS_TAG="$(git describe --tags --abbrev=0 HEAD 2>/dev/null || true)"
+          echo "previous_tag=$PREVIOUS_TAG" >> "$GITHUB_OUTPUT"
+          if [[ -n "$PREVIOUS_TAG" ]]; then
+            git log --pretty='- %s (`%h`)' "$PREVIOUS_TAG..HEAD" > /tmp/changes.md
+          else
+            git log --pretty='- %s (`%h`)' HEAD > /tmp/changes.md
+          fi
+          [[ -s /tmp/changes.md ]] || echo "- Release metadata only" > /tmp/changes.md
+
+      - name: Check NPM Version
         run: |
           NAME="$(node -p "require('./package.json').name")"
           if npm view "$NAME@${{ steps.bump.outputs.to }}" version >/dev/null 2>&1; then
-            echo "::error::Version ${{ steps.bump.outputs.to }} is already published."
+            echo "::error::Version ${{ steps.bump.outputs.to }} already exists on NPM."
             exit 1
           fi
 
-      # Authentication resolves in this order:
-      #   1. OIDC, once a trusted publisher is configured for this package on
-      #      npmjs.com. Nothing stored and nothing to expire.
-      #   2. NPM_TOKEN, needed only for the first publish, because a trusted
-      #      publisher can only be attached to a package that already exists.
-      #
-      # A granular token must have "Bypass 2FA" enabled, or npm answers 403
-      # even when the token is otherwise valid.
-      # --provenance signs the release with the commit and workflow that built
-      # it, so npm can show a verified link back to this repository. It needs
-      # id-token: write above and a public repository.
-      - name: Publish to npm
-        id: publish
+      - name: Publish to NPM
+        id: npm_publish
         run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Explain a 403
-        if: failure() && steps.publish.outcome == 'failure'
+      - name: Explain NPM Authentication Failure
+        if: failure() && steps.npm_publish.outcome == 'failure'
         run: |
           {
-            echo "### Publish failed"
+            echo "### NPM publish failed"
             echo
-            echo "If the log shows \`403 ... bypass 2fa\`, the NPM_TOKEN lacks the"
-            echo "**Bypass 2FA** capability. npm requires it for automated publishing."
-            echo
-            echo "Fix either way:"
-            echo "- Recreate the granular token with **Bypass 2FA** enabled, or"
-            echo "- Publish once locally with \`npm publish --access public --otp=<code>\`,"
-            echo "  then configure a **trusted publisher** so no token is needed again."
+            echo "Use trusted publishing, or give NPM_TOKEN permission to bypass 2FA."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # A second copy on GitHub Packages, purely so the repository shows a
-      # linked package. Installing from here needs a GitHub token even for a
-      # public package, so npmjs.com stays the real install path. A failure is
-      # not worth failing a release that already published.
       - name: Mirror to GitHub Packages
         continue-on-error: true
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # setup-node only authenticates the default registry, so NODE_AUTH_TOKEN
-          # alone gives ENEEDAUTH here. Point the scope at GitHub and attach the
-          # token to that host explicitly, in a temporary npmrc.
           NPMRC="$(mktemp)"
+          trap 'rm -f "$NPMRC"' EXIT
           {
             echo "@jameslovespancakes:registry=https://npm.pkg.github.com"
             echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}"
           } > "$NPMRC"
-          # Provenance is npmjs-only, so it is deliberately omitted here.
-          NPM_CONFIG_USERCONFIG="$NPMRC" npm publish --registry=https://npm.pkg.github.com --access public
-          rm -f "$NPMRC"
+          NPM_CONFIG_USERCONFIG="$NPMRC" npm publish \
+            --registry=https://npm.pkg.github.com \
+            --access public
 
-      - name: Commit and tag
+      - name: Commit Release Metadata
         run: |
-          git config user.name  "github-actions[bot]"
+          VERSION="${{ steps.bump.outputs.to }}"
+          git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add package.json CHANGELOG.md
-          git commit -m "Release v${{ steps.bump.outputs.to }} [skip release]"
-          # Annotated, not lightweight: `--follow-tags` pushes only annotated
-          # tags, so a lightweight one silently never reaches the remote.
-          git tag -a "v${{ steps.bump.outputs.to }}" -m "Release v${{ steps.bump.outputs.to }}"
-          git push origin main --follow-tags
+          git commit -m "Release v$VERSION [skip release]"
+          git tag -a "v$VERSION" -m "Release v$VERSION"
 
-      - name: Create the GitHub release
+      - name: Push Release Difference
+        run: |
+          VERSION="${{ steps.bump.outputs.to }}"
+          git push origin HEAD:main
+          git push origin "v$VERSION"
+
+      - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           NAME="$(node -p "require('./package.json').name")"
           VERSION="${{ steps.bump.outputs.to }}"
+          PREVIOUS_TAG="${{ steps.changes.outputs.previous_tag }}"
           {
             cat /tmp/notes.md
             echo
-            echo "---"
+            echo "## Changes Since ${PREVIOUS_TAG:-Repository Start}"
+            echo
+            cat /tmp/changes.md
             echo
             echo '```sh'
             echo "pi install npm:$NAME"
             echo '```'
             echo
-            echo "[View on npm](https://www.npmjs.com/package/$NAME/v/$VERSION)"
+            echo "[View on NPM](https://www.npmjs.com/package/$NAME/v/$VERSION)"
           } > /tmp/release-body.md
-          gh release create "v$VERSION"             --repo "${{ github.repository }}"             --title "v$VERSION"             --notes-file /tmp/release-body.md
+          gh release create "v$VERSION" \
+            --repo "${{ github.repository }}" \
+            --title "v$VERSION" \
+            --notes-file /tmp/release-body.md
 
-      - name: Summary
+      - name: Write Summary
         run: |
           {
             echo "### Released \`${{ steps.bump.outputs.from }}\` → \`${{ steps.bump.outputs.to }}\`"
             echo
-            echo "\`\`\`sh"
-            echo "pi install npm:$(node -p "require('./package.json').name")"
-            echo "\`\`\`"
+            cat /tmp/changes.md
           } >> "$GITHUB_STEP_SUMMARY"

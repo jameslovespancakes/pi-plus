@@ -9,13 +9,14 @@
     "autoApprove": [
       "anthropic/*",
       "openai-codex/*",
+      "kimi-coding/*",
+      "xai/*",
       "openrouter/stealth/union-alpha"
     ],
     "requireApproval": [
       "openrouter/*",
       "google/*",
-      "openai/*",
-      "xai/*"
+      "openai/*"
     ],
     "deny": []
   },

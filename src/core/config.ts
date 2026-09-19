@@ -2,21 +2,8 @@ import { existsSync } from "node:fs";
 import { agentPath, readJson, writeJson } from "./store.ts";
 
 /**
- * One file for everything pi-plus owns: `~/.pi/agent/pi-plus.json`.
- *
- * ```json
- * {
- *   "env":    { "ARTIFICIAL_ANALYSIS_API_KEY": "aa_…", "AGENT_BOARD_URL": "…" },
- *   "policy": { "autoApprove": [], "requireApproval": [], "deny": [] },
- *   "remote": { "injectStatus": true, "defaults": {}, "workers": [] }
- * }
- * ```
- *
- * Pi's own `settings.json` and `models.json` are deliberately NOT absorbed:
- * pi reads those from fixed paths and folding them in here would break it.
- *
- * Every legacy file is migrated on first read and left on disk, so downgrading
- * keeps working.
+ * Unified pi-plus config. Pi's own settings stay separate, while legacy files
+ * migrate without being deleted.
  */
 
 export const CONFIG_FILE = "pi-plus.json";
@@ -42,8 +29,8 @@ export interface PiPlusConfig {
 const DEFAULTS: PiPlusConfig = {
   env: {},
   policy: {
-    autoApprove: ["anthropic/*", "openai-codex/*"],
-    requireApproval: ["openrouter/*", "google/*", "openai/*", "xai/*"],
+    autoApprove: ["anthropic/*", "openai-codex/*", "kimi-coding/*", "xai/*"],
+    requireApproval: ["openrouter/*", "google/*", "openai/*"],
     deny: [],
   },
   remote: { injectStatus: true, workers: [] },

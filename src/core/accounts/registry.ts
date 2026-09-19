@@ -1,13 +1,4 @@
-/**
- * Provider-agnostic subscription accounts.
- *
- * Today only Anthropic implements this, through
- * `domains/subscriptions/providers/anthropic.ts`. The point of the indirection
- * is that `/account` and `/routing` contain no provider-specific logic, so a
- * second provider is a new adapter rather than a new command surface.
- *
- * Structural types only; nothing here imports pi.
- */
+/** Provider-agnostic subscription account adapters. */
 
 export interface ManagedAccount {
   id: string;
@@ -20,15 +11,12 @@ export interface ManagedAccount {
   primary?: boolean;
 }
 
-/**
- * `standard` uses the main account first and falls back only when it is
- * exhausted. `optimal` balances across accounts by remaining quota and time to
- * reset, keeping session caches sticky.
- */
+/** `standard` prefers primary auth; `optimal` enables provider pooling. */
 export type RoutingMode = "standard" | "optimal";
 
 export interface AccountUi {
   input(title: string, placeholder?: string): Promise<string | undefined>;
+  select(title: string, options: string[]): Promise<string | undefined>;
   confirm(title: string, message: string): Promise<boolean>;
   notify(message: string, type?: "info" | "warning" | "error"): void;
 }
@@ -36,7 +24,8 @@ export interface AccountUi {
 export interface AccountContext {
   ui: AccountUi;
   hasUI: boolean;
-  /** Opens a URL in the user's browser, for OAuth flows. */
+  signal?: AbortSignal;
+  /** Opens an OAuth URL. */
   openBrowser(url: string): Promise<void>;
 }
 
@@ -56,15 +45,9 @@ export interface AccountProvider {
   add(ctx: AccountContext, label: string): Promise<string | undefined>;
   /** Returns the label of the account that was reauthorized. */
   reauth(ctx: AccountContext, accountId: string): Promise<string | undefined>;
-  /**
-   * Enables or disables one account without removing its credentials.
-   * Optional: a provider that cannot suspend accounts simply omits it.
-   */
+  /** Enables or disables an account without removing credentials. */
   setEnabled?(accountId: string, enabled: boolean): Promise<void>;
-  /**
-   * Changes an account's display label. Credentials are untouched, so this is
-   * purely cosmetic and never needs a re-authorization.
-   */
+  /** Changes only the display label. */
   rename?(accountId: string, label: string): Promise<void>;
   routing?: RoutingSupport;
 }

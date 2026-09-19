@@ -1,33 +1,11 @@
 import { loadAccounts, saveAccount, type Account, type QuotaSnapshot } from "./store.ts";
 import { refreshToken } from "./oauth.ts";
 
-/**
- * Quota tracking.
- *
- * There are two sources, and the cheap one is strongly preferred:
- *
- *   1. Response headers. Every `/v1/messages` reply carries the same numbers
- *      as the usage endpoint, so the account actually serving traffic keeps
- *      its snapshot current at no request cost at all.
- *   2. The usage endpoint. Only needed for accounts that are NOT serving
- *      traffic, since routing compares accounts and an idle one would
- *      otherwise never update.
- *
- * Polling used to run on a 5 minute timer regardless of activity. That is what
- * the backoff below exists for: the endpoint rate limits, it answers 429 with
- * `retry-after: 0`, and `pollQuota` reports failure as `undefined`, so the
- * throttling was invisible and simply left routing on stale data.
- */
+/** Uses free response headers first, polling only stale idle accounts. */
 
 const QUOTA_URL = "https://api.anthropic.com/api/oauth/usage";
 const TIMEOUT_MS = 10_000;
-/**
- * Selection tolerates a snapshot this old before it is worth re-polling.
- *
- * This doubles as the poll rate limiter. Polling is triggered by sending a
- * message, so this is the floor between polls however fast you type: send a
- * message after the window and it polls, send ten inside it and it polls once.
- */
+/** Snapshot lifetime and minimum interval between polls. */
 export const QUOTA_FRESH_MS = 10 * 60_000;
 /** After a 429, wait at least this long before touching the endpoint again. */
 export const QUOTA_BACKOFF_MS = 15 * 60_000;
@@ -95,15 +73,8 @@ export function isFresh(quota: QuotaSnapshot | undefined, now = Date.now()): boo
 }
 
 /**
- * Reads a quota snapshot out of `/v1/messages` response headers.
- *
- * Anthropic reports utilisation here as a FRACTION (`0.16`), while the usage
- * endpoint reports a PERCENT (`16`). Verified against the same account at the
- * same moment, including matching reset timestamps. Scaling by 100 is what
- * makes the two sources comparable, so do not drop it.
- *
- * Returns undefined when the headers are absent, which is normal: they do not
- * appear on 4xx replies, and non-Anthropic transports may not expose them.
+ * Parses response quota headers. Header utilization is a fraction, while the
+ * usage endpoint returns a percentage, so header values are scaled by 100.
  */
 export function parseQuotaHeaders(
   headers: Record<string, unknown> | undefined,
@@ -145,12 +116,7 @@ export function parseQuotaHeaders(
   return { five_hour, seven_day, checkedAt: now, source: "headers" };
 }
 
-/**
- * Merges a header-derived snapshot into an account.
- *
- * Scoped per-model limits only come from the usage endpoint, so they are
- * carried over from the previous snapshot rather than dropped.
- */
+/** Merges header quota while preserving polled model limits. */
 export function applyQuotaHeaders(
   accountId: string,
   headers: Record<string, unknown> | undefined,
@@ -163,10 +129,7 @@ export function applyQuotaHeaders(
   const account = storage?.accounts.find((a) => a.id === accountId);
   if (!account) return false;
 
-  // Headers arrive on every response, but utilisation moves in whole percent
-  // steps over windows of hours. Rewriting two credential files per request to
-  // store an unchanged number is pure write amplification, and on Windows each
-  // rewrite is another chance for the rename to collide with a file lock.
+  // Skip unchanged values to avoid credential writes on every response.
   const previous = account.quota;
   const unchanged =
     previous?.five_hour?.usedPercent === fresh.five_hour?.usedPercent
@@ -177,12 +140,7 @@ export function applyQuotaHeaders(
   return true;
 }
 
-/**
- * Polls one account. Returns undefined rather than throwing on failure.
- *
- * Pass `accountId` so a 429 registers backoff; without it the caller can
- * hammer a throttled endpoint and silently keep stale quota.
- */
+/** Polls one account and records rate-limit backoff. */
 export async function pollQuota(
   accessToken: string,
   accountId?: string,
@@ -232,10 +190,7 @@ export async function ensureAccessToken(account: Account): Promise<string | unde
   return refreshed.access;
 }
 
-/**
- * Refreshes stale quota for every usable account, in parallel.
- * Best-effort: a failure leaves the previous snapshot in place.
- */
+/** Refreshes stale account quota in parallel. */
 export async function refreshAllQuota(force = false): Promise<number> {
   const storage = loadAccounts();
   if (!storage) return 0;

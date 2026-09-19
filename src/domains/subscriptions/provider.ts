@@ -13,25 +13,20 @@ import {
 import { getRoutingMode, loadAccounts, saveAccount } from "../../core/anthropic/store.ts";
 
 /**
- * The Anthropic provider.
- *
- * Rather than reimplementing the Messages API, this registers pi's built-in
- * `anthropic-messages` implementation and supplies only the credential. pi
- * resolves auth per request, so `getApiKey` is the hook where account routing
- * happens: it returns the token of whichever account the router picked.
- *
- * Consequences of that choice, stated plainly:
- *   - `getApiKey` is synchronous, so selection reads the CACHED quota snapshot.
- *     A background timer keeps it fresh instead of polling inline.
- *   - A mid-stream 429 is handled by pi's retry rather than by migrating the
- *     in-flight request to another account. The next request routes elsewhere
- *     once the failure is recorded, which is a real behavioural difference from
- *     the vendored provider.
- *
- * What this buys: pi's streaming, tool conversion, cost accounting and retry
- * logic are reused unchanged, instead of a 1,500-line reimplementation whose
- * edge cases we could not see.
+ * Anthropic uses pi's Messages API client with per-request account routing.
+ * Routing reads cached quota; a 429 affects the next request, not its stream.
  */
+
+/**
+ * The hook is global, so require both Anthropic's payload shape and a Claude
+ * model. This prevents `system` injection into other provider requests.
+ */
+function isAnthropicMessagesPayload(payload: any): boolean {
+  if ("instructions" in payload || "input" in payload) return false;
+  if (!Array.isArray(payload.messages)) return false;
+  const model = typeof payload.model === "string" ? payload.model.toLowerCase() : "";
+  return model.startsWith("claude") || ANTHROPIC_MODELS.some((m: any) => m.id === payload.model);
+}
 
 let lastSelected: { id: string; at: number } | undefined;
 
@@ -40,15 +35,7 @@ export function lastRoutedAccount(): { id: string; at: number } | undefined {
   return lastSelected;
 }
 
-/**
- * Chooses an account and returns its access token.
- *
- * `primary` is pi's own credential, which participates as `main` at order 0.
- * Falls back to the primary token whenever routing has nothing better, so a
- * single-account setup behaves exactly as it did before any of this existed.
- */
-// `_sessionId` is accepted for signature compatibility with pi's per-request
-// hook; stickiness is derived from stored assignments rather than the id.
+/** Routes to a pooled account, falling back to pi's primary credential. */
 export function routeAccessToken(primary: string, modelId?: string, _sessionId?: string): string {
   const storage = loadAccounts();
   if (!storage) return primary;
@@ -76,9 +63,7 @@ export function routeAccessToken(primary: string, modelId?: string, _sessionId?:
   const now = Date.now();
   lastSelected = { id: picked.candidate.id, at: now };
   if (picked.candidate.account) {
-    // `lastUsed` only orders the footer's account list, so second-level
-    // precision buys nothing. Persisting it on every request rewrote two
-    // credential files per call; once a minute is indistinguishable in the UI.
+    // Minute precision avoids a credential write on every request.
     const previous = picked.candidate.account.lastUsed ?? 0;
     if (now - previous > 60_000) {
       saveAccount({ ...picked.candidate.account, lastUsed: now });
@@ -102,9 +87,7 @@ export function registerAnthropicProvider(pi: ExtensionAPI): void {
     baseUrl: "https://api.anthropic.com",
     api: "anthropic-messages",
     models: ANTHROPIC_MODELS,
-    // See core/anthropic/client-identity.ts. Without these, Anthropic bills
-    // requests to extra usage rather than plan limits. Delete that import and
-    // this line to opt out; nothing else depends on it.
+    // Required for subscription billing. See client-identity.ts.
     headers: clientIdentityHeaders(),
     oauth: {
       name: "Anthropic Claude Pro/Max",
@@ -114,29 +97,15 @@ export function registerAnthropicProvider(pi: ExtensionAPI): void {
         const refreshed = await refreshToken({ refreshToken: credentials.refresh });
         return { access: refreshed.access, refresh: refreshed.refresh, expires: refreshed.expires };
       },
-      // The routing hook. pi calls this per request.
       getApiKey: (credentials: any) => routeAccessToken(credentials.access),
     },
   });
 
-  /**
-   * Reshapes the request the way the endpoint requires, then signs it.
-   *
-   * Three things have to happen, in order:
-   *   1. pi's system prompt is split. The documentation paragraph cannot live in
-   *      `system` at all, or Anthropic answers 400 "Third-party apps now draw
-   *      from your extra usage"; it moves into the first user message instead.
-   *   2. The billing header goes first in `system`, alongside the Claude Code
-   *      identity line.
-   *   3. The body is signed, which must happen last because the checksum covers
-   *      the canonicalised body.
-   *
-   * See core/anthropic/client-identity.ts for what all of this is and the
-   * caveats around it.
-   */
+  /** Rebuilds the Anthropic prompt, then signs the final body. */
   pi.on("before_provider_request", async (event: any) => {
     const payload = event?.payload;
     if (!payload || typeof payload !== "object") return undefined;
+    if (!isAnthropicMessagesPayload(payload)) return undefined;
 
     const serialized = typeof payload.system === "string"
       ? payload.system
@@ -156,20 +125,10 @@ export function registerAnthropicProvider(pi: ExtensionAPI): void {
     return JSON.parse(signed);
   });
 
-  /**
-   * Free quota refresh for whichever account just served a request.
-   *
-   * Anthropic returns the same utilisation numbers as the usage endpoint in
-   * `anthropic-ratelimit-unified-*` response headers, so the active account
-   * stays current without spending a request on asking.
-   *
-   * `lastRoutedAccount()` is set by `getApiKey` immediately before the call,
-   * which is what lets the reply be attributed to the right account.
-   */
+  /** Updates the routed account from response quota headers. */
   pi.on("after_provider_response", (event: any) => {
     const routed = lastRoutedAccount();
-    // `main` lives in pi's auth.json, not in storage.accounts, so there is no
-    // per-account record to update for it.
+    // The primary account lives in pi's auth store.
     if (!routed || routed.id === MAIN_ACCOUNT_ID) return;
     try {
       applyQuotaHeaders(routed.id, event?.headers);
@@ -178,14 +137,7 @@ export function registerAnthropicProvider(pi: ExtensionAPI): void {
     }
   });
 
-  /**
-   * The same trick for Codex, which reports usage as `x-codex-*` headers.
-   *
-   * Codex has no usage endpoint, so headers are the ONLY quota source: an
-   * account that is not serving traffic keeps whatever snapshot it last had.
-   * Attribution is by `chatgpt-account-id` on the request, since Codex
-   * requests carry the account explicitly rather than only in the token.
-   */
+  /** Updates Codex quota from response headers. */
   pi.on("after_provider_response", (event: any) => {
     const headers = event?.headers;
     if (!headers) return;
@@ -203,19 +155,7 @@ export function registerAnthropicProvider(pi: ExtensionAPI): void {
     }
   });
 
-  /**
-   * Idle accounts still need polling, because routing compares accounts and
-   * response headers only ever refresh the one that served traffic.
-   *
-   * Triggered by sending a message, not by a timer, and `refreshAllQuota`
-   * skips accounts whose snapshot is still fresh. So the poll rate is at most
-   * once per QUOTA_FRESH_MS however fast messages are sent, and an idle
-   * session costs nothing at all. The previous 5 minute interval ran forever
-   * regardless of activity and was being answered with 429s.
-   *
-   * `input` is the per-message hook; `turn_start` would fire once per LLM
-   * response, which is many times per message in a tool-use loop.
-   */
+  /** Refreshes stale idle-account quota when a message starts. */
   pi.on("input", async () => {
     void refreshAllQuota().catch(() => {});
   });

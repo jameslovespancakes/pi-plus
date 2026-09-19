@@ -149,7 +149,7 @@ export async function openProviderPicker(ctx: any, deps: PickerDeps): Promise<vo
 
   const initial = await deps.rows();
   if (initial.length === 0) {
-    ctx.ui.notify("No providers are configured. Sign in with /account or pi auth.", "info");
+    ctx.ui.notify("No providers are configured. Sign in with /accounts or pi auth.", "info");
     return;
   }
 

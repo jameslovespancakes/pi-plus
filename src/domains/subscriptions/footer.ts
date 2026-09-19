@@ -4,20 +4,55 @@ import { refreshUsage, startPolling, stopPolling, subscribe, usageState } from "
 import { renderUsageLines, usageSummaryText } from "../../ui/usage-bars.ts";
 import { formatTokens, sanitize } from "../../ui/format.ts";
 
-/**
- * Single-line session footer (no working-directory line) with the subscription
- * bars rendered directly underneath it.
- *
- * The footer no longer owns the poll loop; it subscribes to usage-service and
- * re-renders on change. That is what lets non-UI consumers get fresh data.
- */
+/** Compact session footer with shared subscription usage bars. */
 
-const SUBSCRIPTION_PROVIDERS = new Set(["anthropic", "openai-codex", "kimi-coding"]);
+const SUBSCRIPTION_PROVIDERS = new Set(["anthropic", "openai-codex", "kimi-coding", "xai"]);
+
+interface SessionTotals {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number;
+  latestHitRate?: number;
+}
+
+function usageFor(entry: any): any {
+  if (entry.type === "message") {
+    return entry.message.role === "assistant" || entry.message.role === "toolResult" ? entry.message.usage : undefined;
+  }
+  return entry.type === "branch_summary" || entry.type === "compaction" ? entry.usage : undefined;
+}
+
+function sumSessionUsage(entries: any[]): SessionTotals {
+  const totals: SessionTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+  for (const entry of entries) {
+    const usage = usageFor(entry);
+    if (!usage) continue;
+    totals.input += usage.input ?? 0;
+    totals.output += usage.output ?? 0;
+    totals.cacheRead += usage.cacheRead ?? 0;
+    totals.cacheWrite += usage.cacheWrite ?? 0;
+    totals.cost += usage.cost?.total ?? 0;
+    if (entry.type === "message" && entry.message.role === "assistant") {
+      const prompt = (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+      totals.latestHitRate = prompt > 0 ? ((usage.cacheRead ?? 0) / prompt) * 100 : undefined;
+    }
+  }
+  return totals;
+}
+
+function usageSignature(entries: any[]): string {
+  const last = entries.at(-1);
+  const usage = last ? usageFor(last) : undefined;
+  return [entries.length, last?.id, usage?.input, usage?.output, usage?.cacheRead, usage?.cacheWrite, usage?.cost?.total].join(":");
+}
 
 export function registerFooter(pi: ExtensionAPI): void {
   let showUsage = true;
   let requestRender: (() => void) | undefined;
   let unsubscribe: (() => void) | undefined;
+  let cachedUsage: { signature: string; totals: SessionTotals } | undefined;
 
   const apply = (ctx: any) => {
     if (!ctx.hasUI) return;
@@ -34,28 +69,12 @@ export function registerFooter(pi: ExtensionAPI): void {
           const width = Math.max(1, Math.floor(Number(rawWidth) || 0));
           const lines: string[] = [];
 
-          let input = 0;
-          let output = 0;
-          let cacheRead = 0;
-          let cacheWrite = 0;
-          let cost = 0;
-          let latestHitRate: number | undefined;
-
-          for (const entry of ctx.sessionManager.getEntries()) {
-            const usage = entry.type === "message"
-              ? (entry.message.role === "assistant" || entry.message.role === "toolResult" ? entry.message.usage : undefined)
-              : (entry.type === "branch_summary" || entry.type === "compaction" ? entry.usage : undefined);
-            if (!usage) continue;
-            input += usage.input ?? 0;
-            output += usage.output ?? 0;
-            cacheRead += usage.cacheRead ?? 0;
-            cacheWrite += usage.cacheWrite ?? 0;
-            cost += usage.cost?.total ?? 0;
-            if (entry.type === "message" && entry.message.role === "assistant") {
-              const prompt = (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
-              latestHitRate = prompt > 0 ? ((usage.cacheRead ?? 0) / prompt) * 100 : undefined;
-            }
+          const entries = ctx.sessionManager.getEntries();
+          const signature = usageSignature(entries);
+          if (cachedUsage?.signature !== signature) {
+            cachedUsage = { signature, totals: sumSessionUsage(entries) };
           }
+          const { input, output, cacheRead, cacheWrite, cost, latestHitRate } = cachedUsage.totals;
 
           const parts: string[] = [];
           if (input) parts.push(`↑${formatTokens(input)}`);

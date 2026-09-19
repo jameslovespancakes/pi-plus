@@ -1,0 +1,400 @@
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { WorkflowProgressEvent } from "./types.ts";
+import type { AgentChatMessage, AgentChatRole, AgentRowStatus, WorkflowLaneItemStatus, WorkflowProgressSnapshot } from "./progress-types.ts";
+import { formatWorkflowUsageLine, type WorkflowUsageSnapshot } from "./usage.ts";
+import { unknownErrorMessage } from "./unknown-error.ts";
+import { statusTextFromCounts, type WorkflowStatusCounts } from "./ui/workflow-format.ts";
+import { toDisplayLine } from "./ui/display-text.ts";
+import { renderWorkflowWidgetLines } from "./ui/workflow-widget.ts";
+
+export type {
+  AgentChatMessage,
+  AgentChatRole,
+  AgentRowSnapshot,
+  AgentRowStatus,
+  PhaseSnapshot,
+  WorkflowCounterSnapshot,
+  WorkflowLaneItemSnapshot,
+  WorkflowLaneItemStatus,
+  WorkflowProgressSnapshot,
+} from "./progress-types.ts";
+
+interface AgentRow {
+  id: number;
+  label: string;
+  model?: string;
+  status: AgentRowStatus;
+  startedAt?: number;
+  doneAt?: number;
+  toolUses: number;
+  lastTool?: string;
+  error?: string;
+}
+
+interface Phase {
+  title: string;
+  agents: AgentRow[];
+}
+
+interface WorkflowCounter {
+  key: string;
+  label: string;
+  value: number;
+}
+
+interface WorkflowLaneItem {
+  lane: string;
+  title: string;
+  subtitle?: string;
+  status: WorkflowLaneItemStatus;
+  details?: string;
+  createdAt: number;
+}
+
+const LOG_LIMIT = 24;
+const AGENT_CHAT_LIMIT = 80;
+const AGENT_CHAT_TEXT_LIMIT = 2_000;
+/** Stored breadcrumbs stay single-line so every live surface keeps a stable height. */
+const LOG_DISPLAY_LIMIT = 200;
+const AGENT_ERROR_DISPLAY_LIMIT = 300;
+const WIDGET_REFRESH_INTERVAL_MS = 1_000;
+export const DEFAULT_LANE_ITEM_LIMIT = 200;
+
+/**
+ * Tracks live workflow state for widgets, footer/status text, result renderers,
+ * and headless stderr breadcrumbs.
+ */
+export class ProgressTracker {
+  private readonly phases: Phase[] = [];
+  private readonly logs: string[] = [];
+  private readonly counters = new Map<string, WorkflowCounter>();
+  private readonly summary = new Map<string, string | number>();
+  private readonly lanes = new Map<string, WorkflowLaneItem[]>();
+  private readonly laneOverflow = new Map<string, number>();
+  private readonly rowsById = new Map<number, AgentRow>();
+  private readonly agentChats = new Map<number, AgentChatMessage[]>();
+  private readonly agentFollowUps = new Map<number, (message: string) => Promise<void>>();
+  private readonly listeners = new Set<() => void>();
+  private readonly agentCounts: Record<AgentRowStatus, number> = { queued: 0, running: 0, done: 0, failed: 0 };
+  private readonly startedAt = Date.now();
+  private readonly laneItemLimit = laneItemLimitFromEnv();
+  private doneAt: number | undefined;
+  private currentPhase = "Workflow";
+  private nextAgentId = 1;
+  private lastStatusText: string | undefined;
+  private usageSnapshot: WorkflowUsageSnapshot | undefined;
+  private widgetRefreshInterval: ReturnType<typeof setInterval> | undefined;
+  private readonly surfaceKey: string;
+
+  constructor(
+    private readonly ctx: ExtensionContext,
+    private readonly title: string,
+    private readonly runId: string,
+    private readonly onSnapshot?: (snapshot: WorkflowProgressSnapshot) => void,
+  ) {
+    this.surfaceKey = `workflow:${runId}`;
+    this.ensurePhase(this.currentPhase);
+  }
+
+  private ensurePhase(title: string): Phase {
+    let phase = this.phases.find((candidate) => candidate.title === title);
+    if (!phase) {
+      phase = { title, agents: [] };
+      this.phases.push(phase);
+    }
+    return phase;
+  }
+
+  phase(title: string): void {
+    this.currentPhase = title;
+    this.ensurePhase(title);
+    if (!this.ctx.hasUI) process.stderr.write(`[${this.title}] ${title}\n`);
+    this.publish();
+  }
+
+  log(message: string): void {
+    this.logs.push(toDisplayLine(message, LOG_DISPLAY_LIMIT));
+    while (this.logs.length > LOG_LIMIT) this.logs.shift();
+    if (!this.ctx.hasUI) process.stderr.write(`[${this.title}] ${message}\n`);
+    this.publish();
+  }
+
+  event(event: WorkflowProgressEvent): void {
+    switch (event.type) {
+      case "counter":
+        this.counters.set(event.key, { key: event.key, label: event.label, value: event.value });
+        break;
+      case "counter_delta": {
+        const current = this.counters.get(event.key);
+        this.counters.set(event.key, {
+          key: event.key,
+          label: event.label,
+          value: (current?.value ?? 0) + event.delta,
+        });
+        break;
+      }
+      case "lane_item": {
+        const lane = this.lanes.get(event.lane) ?? [];
+        lane.push({
+          lane: event.lane,
+          title: event.title,
+          subtitle: event.subtitle,
+          status: event.status,
+          details: event.details,
+          createdAt: Date.now(),
+        });
+        this.pruneLane(event.lane, lane);
+        this.lanes.set(event.lane, lane);
+        break;
+      }
+      case "summary":
+        this.summary.set(event.key, event.value);
+        break;
+    }
+    this.publish();
+  }
+
+  agentQueued(phase: string | undefined, label: string, model?: string): number {
+    const id = this.nextAgentId++;
+    const row = { label, model, id, status: "queued" as const, toolUses: 0 };
+    this.ensurePhase(phase ?? this.currentPhase).agents.push(row);
+    this.rowsById.set(id, row);
+    this.agentCounts.queued++;
+    this.publish();
+    return id;
+  }
+
+  agentStart(phase: string | undefined, label: string, id?: number, model?: string): void {
+    const row = id === undefined ? undefined : this.findRowById(id);
+    if (row) {
+      this.transitionAgentStatus(row, "running");
+      row.startedAt = Date.now();
+      row.error = undefined;
+    } else {
+      const nextRow = {
+        label,
+        model,
+        id: this.nextAgentId++,
+        status: "running" as const,
+        startedAt: Date.now(),
+        toolUses: 0,
+      };
+      this.ensurePhase(phase ?? this.currentPhase).agents.push(nextRow);
+      this.rowsById.set(nextRow.id, nextRow);
+      this.agentCounts.running++;
+    }
+    this.publish();
+  }
+
+  agentTool(label: string, tool: string, id?: number): void {
+    const row = this.findRow(label, id);
+    if (row) {
+      row.lastTool = tool;
+      row.toolUses += 1;
+      this.appendAgentChat(row.id, "tool", tool);
+    }
+    this.publish();
+  }
+
+  agentMessage(id: number, role: AgentChatRole, text: string): void {
+    this.appendAgentChat(id, role, text);
+    this.publish();
+  }
+
+  bindAgentFollowUp(id: number, send: (message: string) => Promise<void>): () => void {
+    this.agentFollowUps.set(id, send);
+    this.publish();
+    return () => {
+      if (this.agentFollowUps.get(id) === send) this.agentFollowUps.delete(id);
+      this.publish();
+    };
+  }
+
+  conversation(id: number): readonly AgentChatMessage[] {
+    return (this.agentChats.get(id) ?? []).map((message) => ({ ...message }));
+  }
+
+  async followUp(id: number, message: string): Promise<void> {
+    const text = toDisplayLine(message, AGENT_CHAT_TEXT_LIMIT);
+    if (!text) throw new Error("Enter a follow-up message.");
+    const send = this.agentFollowUps.get(id);
+    if (!send) throw new Error("This agent is no longer accepting follow-ups.");
+    await send(text);
+    this.appendAgentChat(id, "user", text);
+    this.publish();
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  agentDone(label: string, id?: number): void {
+    const row = this.findRow(label, id);
+    if (row && row.status !== "failed") {
+      this.transitionAgentStatus(row, "done");
+      row.doneAt = Date.now();
+    }
+    this.publish();
+  }
+
+  agentFailed(label: string, error: unknown, id?: number): void {
+    const row = this.findRow(label, id);
+    if (row) {
+      this.transitionAgentStatus(row, "failed");
+      row.doneAt = Date.now();
+      row.error = toDisplayLine(unknownErrorMessage(error), AGENT_ERROR_DISPLAY_LIMIT) || "agent failed";
+      this.appendAgentChat(row.id, "status", row.error);
+    }
+    this.publish();
+  }
+
+  updateUsage(snapshot: WorkflowUsageSnapshot): void {
+    this.usageSnapshot = snapshot;
+    this.publish();
+  }
+
+  snapshot(): WorkflowProgressSnapshot {
+    return {
+      runId: this.runId,
+      title: this.title,
+      startedAt: this.startedAt,
+      doneAt: this.doneAt,
+      currentPhase: this.currentPhase,
+      phases: this.phases.map((phase) => ({
+        title: phase.title,
+        agents: phase.agents.map((agent) => ({ ...agent })),
+      })),
+      counters: [...this.counters.values()].map((counter) => ({ ...counter })),
+      summary: [...this.summary.entries()],
+      lanes: [...this.lanes.entries()].map(([lane, items]) => [lane, items.map((item) => ({ ...item }))]),
+      laneOverflow: [...this.laneOverflow.entries()],
+      logs: [...this.logs],
+      usage: this.usageSnapshot,
+    };
+  }
+
+  statusCounts(): WorkflowStatusCounts {
+    return this.statusCountsSnapshot();
+  }
+
+  private statusCountsSnapshot(): WorkflowStatusCounts {
+    return {
+      queued: this.agentCounts.queued,
+      running: this.agentCounts.running,
+      done: this.agentCounts.done,
+      failed: this.agentCounts.failed,
+      total: this.agentCounts.queued + this.agentCounts.running + this.agentCounts.done + this.agentCounts.failed,
+    };
+  }
+
+  private transitionAgentStatus(row: AgentRow, nextStatus: AgentRowStatus): void {
+    if (row.status === nextStatus) return;
+    this.agentCounts[row.status]--;
+    row.status = nextStatus;
+    this.agentCounts[nextStatus]++;
+  }
+
+  private pruneLane(laneName: string, lane: WorkflowLaneItem[]): void {
+    if (this.laneItemLimit <= 0) return;
+    while (lane.length > this.laneItemLimit) {
+      lane.shift();
+      this.laneOverflow.set(laneName, (this.laneOverflow.get(laneName) ?? 0) + 1);
+    }
+  }
+
+  private appendAgentChat(id: number, role: AgentChatRole, text: string): void {
+    const value = toDisplayLine(text, AGENT_CHAT_TEXT_LIMIT);
+    if (!value) return;
+    const messages = this.agentChats.get(id) ?? [];
+    messages.push({ role, text: value, createdAt: Date.now() });
+    while (messages.length > AGENT_CHAT_LIMIT) messages.shift();
+    this.agentChats.set(id, messages);
+  }
+
+  private findRow(label: string, id?: number): AgentRow | undefined {
+    if (id !== undefined) return this.findRowById(id);
+    for (let i = this.phases.length - 1; i >= 0; i--) {
+      const running = this.phases[i].agents.find(
+        (agent) => agent.label === label && (agent.status === "running" || agent.status === "queued"),
+      );
+      if (running) return running;
+    }
+    for (let i = this.phases.length - 1; i >= 0; i--) {
+      const matching = this.phases[i].agents.find((agent) => agent.label === label);
+      if (matching) return matching;
+    }
+    return undefined;
+  }
+
+  private findRowById(id: number): AgentRow | undefined {
+    return this.rowsById.get(id);
+  }
+
+  private publish(): void {
+    this.publishSnapshot();
+    if (!this.ctx.hasUI) return;
+    this.publishWidget();
+    this.startWidgetRefresh();
+    this.publishStatus();
+  }
+
+  private publishWidget(): void {
+    this.ctx.ui.setWidget(
+      this.surfaceKey,
+      renderWorkflowWidgetLines(this.snapshot(), this.ctx.ui.theme),
+      { placement: "aboveEditor" },
+    );
+  }
+
+  private startWidgetRefresh(): void {
+    if (this.widgetRefreshInterval !== undefined) return;
+    this.widgetRefreshInterval = setInterval(() => this.publishWidget(), WIDGET_REFRESH_INTERVAL_MS);
+  }
+
+  private stopWidgetRefresh(): void {
+    if (this.widgetRefreshInterval === undefined) return;
+    clearInterval(this.widgetRefreshInterval);
+    this.widgetRefreshInterval = undefined;
+  }
+
+  private publishStatus(): void {
+    const status = statusTextFromCounts(
+      {
+        title: this.title,
+        doneAt: this.doneAt,
+        currentPhase: this.currentPhase,
+        counters: [...this.counters.values()].map((counter) => ({ ...counter })),
+      },
+      this.statusCountsSnapshot(),
+      this.ctx.ui.theme,
+    );
+    const usage = formatWorkflowUsageLine(this.usageSnapshot);
+    const next = usage ? `${status} · ${usage}` : status;
+    if (next === this.lastStatusText) return;
+    this.ctx.ui.setStatus(this.surfaceKey, next);
+    this.lastStatusText = next;
+  }
+
+  /** Clear this run's live workflow surfaces. Final feedback is delivered by the result surface. */
+  done(): void {
+    this.doneAt = Date.now();
+    this.stopWidgetRefresh();
+    this.publishSnapshot();
+    if (!this.ctx.hasUI) return;
+    this.ctx.ui.setWidget(this.surfaceKey, undefined);
+    this.ctx.ui.setStatus(this.surfaceKey, undefined);
+    this.lastStatusText = undefined;
+  }
+
+  private publishSnapshot(): void {
+    this.onSnapshot?.(this.snapshot());
+    for (const listener of this.listeners) listener();
+  }
+}
+
+function laneItemLimitFromEnv(): number {
+  const parsed = Number(process.env.PI_WORKFLOW_LANE_ITEM_LIMIT ?? "");
+  if (!Number.isFinite(parsed) || parsed < 1) return DEFAULT_LANE_ITEM_LIMIT;
+  return Math.trunc(parsed);
+}

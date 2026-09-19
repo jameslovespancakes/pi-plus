@@ -1,7 +1,5 @@
 name: CI
 
-# Runs on every push and pull request, including main. Releases are opt-in now,
-# so this is the only thing checking ordinary pushes.
 on:
   pull_request:
   push:
@@ -9,34 +7,33 @@ on:
 
 jobs:
   verify:
-    name: Lint / Typecheck / Tests
+    name: Lint, Type Check, and Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - name: Check Out Repository
+        uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v5
+      - name: Set Up Node
+        uses: actions/setup-node@v5
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
-      - name: Install
+      - name: Install Dependencies
         run: npm install --no-audit --no-fund
 
-      # Lint first: it is the fastest gate and catches dead code that the
-      # typechecker accepts.
       - name: Lint
         run: npm run lint
 
-      - name: Typecheck
+      - name: Type Check
         run: npm run typecheck
 
-      - name: Test
+      - name: Run Tests
         run: npm test
 
-      - name: Verify package contents
+      - name: Verify Package Contents
         run: |
           npm pack --dry-run
-          # Fail loudly if a real credential ever reaches the tarball.
           if npm pack --dry-run --json \
             | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const f=JSON.parse(d)[0].files.map(x=>x.path);const bad=f.filter(p=>/^config\/(pi-plus|pi-plus\.env|agent-board|model-quality-key)\.json$/.test(p));if(bad.length){console.error('Secret file staged for publish:',bad.join(', '));process.exit(1)}})"; then
             echo "No credential files in tarball."

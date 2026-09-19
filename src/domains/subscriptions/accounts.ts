@@ -35,8 +35,10 @@ async function openBrowser(pi: ExtensionAPI, url: string): Promise<void> {
 function bridge(pi: ExtensionAPI, ctx: any): AccountContext {
   return {
     hasUI: ctx.hasUI,
+    signal: ctx.signal,
     ui: {
       input: (title, placeholder) => ctx.ui.input(title, placeholder),
+      select: (title, options) => ctx.ui.select(title, options),
       confirm: (title, message) => ctx.ui.confirm(title, message),
       notify: (message, type) => ctx.ui.notify(message, type ?? "info"),
     },
@@ -58,34 +60,34 @@ async function listAll(ctx: any): Promise<void> {
     return;
   }
 
-  const blocks: string[] = [];
-  for (const provider of providers) {
+  const blocks = await Promise.all(providers.map(async (provider): Promise<string[]> => {
     try {
-      const accounts = await provider.list();
-      const routing = provider.routing ? ` · routing: ${await provider.routing.get()}` : "";
-      blocks.push(
+      const [accounts, mode] = await Promise.all([
+        provider.list(),
+        provider.routing?.get(),
+      ]);
+      const routing = mode ? ` · routing: ${mode}` : "";
+      return [
         `${provider.label} (${provider.id})${routing}`,
         ...(accounts.length > 0
           ? accounts.map((account) => `  ${describe(account)}`)
-          : [`  no additional accounts, add one with /account ${provider.id} add`]),
-      );
+          : [`  no additional accounts, add one with /accounts add ${provider.id}`]),
+      ];
     } catch (error) {
-      blocks.push(`${provider.label} (${provider.id}): ${error instanceof Error ? error.message : String(error)}`);
+      return [`${provider.label} (${provider.id}): ${error instanceof Error ? error.message : String(error)}`];
     }
-  }
-  ctx.ui.notify(blocks.join("\n"), "info");
+  }));
+  ctx.ui.notify(blocks.flat().join("\n"), "info");
 }
-
-
 
 async function pickAccount(ctx: any, provider: AccountProvider): Promise<string | undefined> {
   const accounts = await provider.list();
   if (accounts.length === 0) {
-    ctx.ui.notify(`No ${provider.label} accounts yet. Add one with /account ${provider.id} add.`, "info");
+    ctx.ui.notify(`No ${provider.label} accounts yet. Add one with /accounts add ${provider.id}.`, "info");
     return undefined;
   }
   if (!ctx.hasUI) {
-    ctx.ui.notify(`Specify an account: /account ${provider.id} reauth <label>`, "warning");
+    ctx.ui.notify(`Choose an account with /accounts reauth ${provider.id}.`, "warning");
     return undefined;
   }
 
@@ -96,19 +98,15 @@ async function pickAccount(ctx: any, provider: AccountProvider): Promise<string 
 }
 
 export function registerAccountCommands(pi: ExtensionAPI): void {
-  /** Toggles one account and returns the state it ended in. */
   const toggle = (providerId: string, accountId: string): AccountState => {
     const provider = accountProvider(providerId);
     if (!provider?.setEnabled) throw new Error(`${providerId} accounts cannot be disabled.`);
     const next = pendingState.get(`${providerId}:${accountId}`) === "enabled" ? "disabled" : "enabled";
     pendingState.set(`${providerId}:${accountId}`, next);
-    // Adapters persist asynchronously; the picker needs the answer now, so the
-    // write is fired off and failures surface as a notification.
     void provider.setEnabled(accountId, next === "enabled").catch(() => {});
     return next;
   };
 
-  /** Mirror of on-disk state, so the synchronous toggle can answer instantly. */
   const pendingState = new Map<string, AccountState>();
 
   const rows = async () => {
@@ -118,8 +116,7 @@ export function registerAccountCommands(pi: ExtensionAPI): void {
     return list;
   };
 
-  /** Adds an account: choose provider, name it, authorize. */
-  async function addAccount(ctx: any, providerId?: string): Promise<void> {
+  async function addAccount(ctx: any, providerId?: string, requestedLabel?: string): Promise<void> {
     if (!ctx.hasUI) {
       ctx.ui.notify("Adding an account requires interactive Pi mode.", "error");
       return;
@@ -144,7 +141,8 @@ export function registerAccountCommands(pi: ExtensionAPI): void {
     }
     if (!provider) return;
 
-    const label = await ctx.ui.input(`${provider.label} account name`, "Work, Personal, etc.");
+    const label = requestedLabel?.trim()
+      || await ctx.ui.input(`${provider.label} account name`, "Work, Personal, etc.");
     if (!label?.trim()) return;
 
     try {
@@ -155,7 +153,6 @@ export function registerAccountCommands(pi: ExtensionAPI): void {
     }
   }
 
-  /** Rename wizard: pick an account, type a new name. */
   async function renameAccount(ctx: any): Promise<void> {
     if (!ctx.hasUI) {
       ctx.ui.notify("Renaming an account requires interactive Pi mode.", "error");
@@ -179,7 +176,6 @@ export function registerAccountCommands(pi: ExtensionAPI): void {
 
     const provider = accountProvider(row.providerId);
     try {
-      // Row ids are "<providerId>:<accountId>"; strip the prefix.
       await provider!.rename!(row.id.slice(row.providerId.length + 1), next.trim());
       ctx.ui.notify(`Renamed to “${next.trim()}”.`, "info");
     } catch (error) {
@@ -202,15 +198,15 @@ export function registerAccountCommands(pi: ExtensionAPI): void {
         .map((id) => ({ value: `${parts[0]} ${id}`, label: id }));
     },
     handler: async (args, ctx) => {
-      const [action, providerId] = args.trim().split(/\s+/).filter(Boolean);
+      const [action, providerId, ...rest] = args.trim().split(/\s+/).filter(Boolean);
 
-      if (action === "add") return addAccount(ctx, providerId);
+      if (action === "add") return addAccount(ctx, providerId, rest.join(" ") || undefined);
       if (action === "rename") return renameAccount(ctx);
 
       if (action === "reauth") {
         const provider = providerId ? accountProvider(providerId) : accountProviders()[0];
         if (!provider) { ctx.ui.notify("No subscription providers are registered.", "error"); return; }
-        const target = await pickAccount(ctx, provider);
+        const target = rest.join(" ") || await pickAccount(ctx, provider);
         if (!target) return;
         try {
           const done = await provider.reauth(bridge(pi, ctx), target);
@@ -226,11 +222,9 @@ export function registerAccountCommands(pi: ExtensionAPI): void {
         return;
       }
 
-      // Bare /accounts: the picker interactively, plain text headless.
       if (!ctx.hasUI) return listAll(ctx);
 
-      // The picker closes to run a wizard, then reopens so the result is
-      // visible immediately. Bounded so a misbehaving action cannot spin.
+      // Reopen after each wizard so changes appear immediately.
       for (let step = 0; step < 24; step++) {
         const requested = await openAccountsPicker(ctx, { rows, toggle });
         if (!requested) return;

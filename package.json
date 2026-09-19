@@ -12,7 +12,9 @@
     "anthropic",
     "claude",
     "quota",
-    "models"
+    "models",
+    "workflows",
+    "multi-agent"
   ],
   "repository": {
     "type": "git",
@@ -35,6 +37,7 @@
       "./src/domains/setup/index.ts",
       "./src/domains/subscriptions/index.ts",
       "./src/domains/models/index.ts",
+      "./src/domains/workflows/index.ts",
       "./src/domains/agents/index.ts",
       "./src/domains/remote/index.ts"
     ],
