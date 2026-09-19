@@ -8,6 +8,8 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+## [1.0.10] - 2026-09-19
+
 ### Fixed
 
 - The GitHub Packages mirror failed with `ENEEDAUTH`. `setup-node` only
@@ -164,7 +166,8 @@ First published release.
   truncated to `claude` and named neither the window nor the model. They now
   show the model family, for example `Fable`.
 
-[Unreleased]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.9...HEAD
+[Unreleased]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.10...HEAD
+[1.0.10]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.9...v1.0.10
 [1.0.9]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.8...v1.0.9
 [1.0.8]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.7...v1.0.8
 [1.0.7]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.6...v1.0.7
