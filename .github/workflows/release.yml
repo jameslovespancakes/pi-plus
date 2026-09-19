@@ -116,7 +116,17 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          npm publish --registry=https://npm.pkg.github.com --access public
+          # setup-node only authenticates the default registry, so NODE_AUTH_TOKEN
+          # alone gives ENEEDAUTH here. Point the scope at GitHub and attach the
+          # token to that host explicitly, in a temporary npmrc.
+          NPMRC="$(mktemp)"
+          {
+            echo "@jameslovespancakes:registry=https://npm.pkg.github.com"
+            echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}"
+          } > "$NPMRC"
+          # Provenance is npmjs-only, so it is deliberately omitted here.
+          NPM_CONFIG_USERCONFIG="$NPMRC" npm publish --registry=https://npm.pkg.github.com --access public
+          rm -f "$NPMRC"
 
       - name: Commit and tag
         run: |

@@ -8,6 +8,13 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+### Fixed
+
+- The GitHub Packages mirror failed with `ENEEDAUTH`. `setup-node` only
+  authenticates the default registry, so `NODE_AUTH_TOKEN` alone does not
+  cover a second one; the scope and token are now bound to that host
+  explicitly.
+
 ## [1.0.9] - 2026-09-19
 
 ### Added
