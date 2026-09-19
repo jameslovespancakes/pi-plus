@@ -22,7 +22,8 @@ jobs:
   # Gate. Reuses the CI workflow verbatim so "verified" means exactly the same
   # thing on a pull request as it does on a release, and cannot drift.
   verify:
-    name: Lint / Typecheck / Tests
+    # Deliberately unnamed: GitHub prefixes the reusable workflow's own job
+    # name with this one, and naming both renders it twice.
     if: "!contains(github.event.head_commit.message, '[skip release]')"
     uses: ./.github/workflows/ci.yml
 
@@ -95,7 +96,9 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add package.json
           git commit -m "Release v${{ steps.bump.outputs.to }} [skip release]"
-          git tag "v${{ steps.bump.outputs.to }}"
+          # Annotated, not lightweight: `--follow-tags` pushes only annotated
+          # tags, so a lightweight one silently never reaches the remote.
+          git tag -a "v${{ steps.bump.outputs.to }}" -m "Release v${{ steps.bump.outputs.to }}"
           git push origin main --follow-tags
 
       - name: Summary
