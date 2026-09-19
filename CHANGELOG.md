@@ -8,6 +8,20 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+### Fixed
+
+- `EPERM: operation not permitted, rename` when saving Anthropic credentials
+  on Windows. The store writes a temp file and renames it over the target, and
+  Windows rejects that rename whenever another handle holds the destination
+  open, which is what a virus scanner, the search indexer or a second pi
+  session looks like. The rename is now retried briefly, and a write that
+  still cannot land is dropped instead of throwing into a live request.
+- Write amplification that made the collision likely in the first place. Quota
+  headers arrive on every response and routing recorded `lastUsed` on every
+  request, so a single API call rewrote two credential files twice. Quota is
+  now persisted only when a percentage actually changes, and `lastUsed` at most
+  once a minute, taking a normal request from four writes to none.
+
 ## [1.0.7] - 2026-09-19
 
 ### Removed

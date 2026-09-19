@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -93,13 +93,44 @@ function readJson<T>(path: string): T | undefined {
   }
 }
 
-/** Temp-file + rename, so a crash cannot leave a half-written credential file. */
+/**
+ * Temp-file + rename, so a crash cannot leave a half-written credential file.
+ *
+ * The rename is retried because on Windows it fails with EPERM whenever the
+ * destination is momentarily held open by someone else: a virus scanner
+ * examining the file we just wrote, the search indexer, or another pi session
+ * reading it. The temp name carries the pid so concurrent writers never share
+ * a temp file, but they can still collide on the destination.
+ *
+ * Retries are brief and synchronous. Losing a quota update is harmless, so a
+ * final failure removes the temp file and gives up rather than throwing into
+ * a live request.
+ */
 function writeJson(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
   const temp = `${path}.${process.pid}.tmp`;
   writeFileSync(temp, JSON.stringify(value, undefined, 2), { encoding: "utf8", mode: 0o600 });
-  renameSync(temp, path);
+
+  const TRANSIENT = new Set(["EPERM", "EACCES", "EBUSY", "ENOTEMPTY"]);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      renameSync(temp, path);
+      return;
+    } catch (error: any) {
+      if (attempt >= 5 || !TRANSIENT.has(error?.code)) {
+        try { rmSync(temp, { force: true }); } catch { /* best effort */ }
+        if (attempt >= 5) return; // transient and unresolved: drop this write
+        throw error;
+      }
+      // 1, 2, 4, 8, 16ms. Long enough for a scanner to release the handle,
+      // short enough not to stall the request that triggered it.
+      Atomics.wait(SPIN, 0, 0, 2 ** attempt);
+    }
+  }
 }
+
+/** Backing store for the synchronous sleep above. */
+const SPIN = new Int32Array(new SharedArrayBuffer(4));
 
 const pick = <T extends object>(source: any, keys: readonly string[]): T =>
   Object.fromEntries(keys.filter((k) => source?.[k] !== undefined).map((k) => [k, source[k]])) as T;

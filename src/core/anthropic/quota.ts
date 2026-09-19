@@ -163,7 +163,17 @@ export function applyQuotaHeaders(
   const account = storage?.accounts.find((a) => a.id === accountId);
   if (!account) return false;
 
-  saveAccount({ ...account, quota: { ...fresh, scoped: account.quota?.scoped } });
+  // Headers arrive on every response, but utilisation moves in whole percent
+  // steps over windows of hours. Rewriting two credential files per request to
+  // store an unchanged number is pure write amplification, and on Windows each
+  // rewrite is another chance for the rename to collide with a file lock.
+  const previous = account.quota;
+  const unchanged =
+    previous?.five_hour?.usedPercent === fresh.five_hour?.usedPercent
+    && previous?.seven_day?.usedPercent === fresh.seven_day?.usedPercent;
+  if (unchanged) return false;
+
+  saveAccount({ ...account, quota: { ...fresh, scoped: previous?.scoped } });
   return true;
 }
 

@@ -73,9 +73,16 @@ export function routeAccessToken(primary: string, modelId?: string, _sessionId?:
     return primary;
   }
 
-  lastSelected = { id: picked.candidate.id, at: Date.now() };
+  const now = Date.now();
+  lastSelected = { id: picked.candidate.id, at: now };
   if (picked.candidate.account) {
-    saveAccount({ ...picked.candidate.account, lastUsed: Date.now() });
+    // `lastUsed` only orders the footer's account list, so second-level
+    // precision buys nothing. Persisting it on every request rewrote two
+    // credential files per call; once a minute is indistinguishable in the UI.
+    const previous = picked.candidate.account.lastUsed ?? 0;
+    if (now - previous > 60_000) {
+      saveAccount({ ...picked.candidate.account, lastUsed: now });
+    }
   }
   return picked.candidate.access ?? primary;
 }
