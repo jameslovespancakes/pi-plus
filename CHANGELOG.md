@@ -8,6 +8,14 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+### Fixed
+
+- The build badge reads the release workflow instead of the CI workflow. A
+  `workflow_call` run is attributed to the caller, so CI had no runs of its own
+  on main and its badge showed "no status". The release workflow contains the
+  same lint, typecheck and test job, so the badge cannot be green unless those
+  passed.
+
 ## [1.0.5] - 2026-09-19
 
 ### Changed
