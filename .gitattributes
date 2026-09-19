@@ -1,0 +1,11 @@
+# The release job promotes "## [Unreleased]" and commits the result, so any
+# local commit that also edited Unreleased conflicts on the next pull. A union
+# merge keeps both sides instead of stopping, and tests/changelog.test.ts
+# fails the build if that ever lands an entry inside an already-released
+# section, which is the one way a union merge can be wrong here.
+CHANGELOG.md merge=union
+
+# Keep line endings stable across Windows and the Linux runners.
+* text=auto eol=lf
+*.png binary
+*.svg text eol=lf
