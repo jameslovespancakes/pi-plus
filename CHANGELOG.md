@@ -8,6 +8,8 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+## [1.0.7] - 2026-09-19
+
 ### Removed
 
 - The published package no longer carries the changelog, the project mark, the
@@ -128,7 +130,8 @@ First published release.
   truncated to `claude` and named neither the window nor the model. They now
   show the model family, for example `Fable`.
 
-[Unreleased]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.6...HEAD
+[Unreleased]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.7...HEAD
+[1.0.7]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.6...v1.0.7
 [1.0.6]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.5...v1.0.6
 [1.0.5]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.3...v1.0.4
