@@ -8,6 +8,8 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+## [1.0.11] - 2026-09-19
+
 ### Changed
 
 - The example config and its test use placeholder worker names. The previous
@@ -176,7 +178,8 @@ First published release.
   truncated to `claude` and named neither the window nor the model. They now
   show the model family, for example `Fable`.
 
-[Unreleased]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.10...HEAD
+[Unreleased]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.11...HEAD
+[1.0.11]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.10...v1.0.11
 [1.0.10]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.9...v1.0.10
 [1.0.9]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.8...v1.0.9
 [1.0.8]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.7...v1.0.8
