@@ -8,6 +8,8 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-09-19
+
 ### Changed
 
 - The README shows each interface as text rather than a screenshot. The blocks
@@ -108,7 +110,8 @@ First published release.
   truncated to `claude` and named neither the window nor the model. They now
   show the model family, for example `Fable`.
 
-[Unreleased]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.4...HEAD
+[Unreleased]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.5...HEAD
+[1.0.5]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.1...v1.0.2
