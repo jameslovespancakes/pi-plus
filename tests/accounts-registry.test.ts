@@ -11,7 +11,7 @@ import {
 } from "../src/core/accounts/registry.ts";
 
 function stub(id: string, withRouting = false): AccountProvider {
-  let mode: RoutingMode = "standard";
+  let mode: RoutingMode = "sequential";
   return {
     id,
     label: id.toUpperCase(),
@@ -66,10 +66,10 @@ test("routing round-trips through the adapter", async () => {
   resetAccountProviders();
   registerAccountProvider(stub("anthropic", true));
   const routing = accountProvider("anthropic")!.routing!;
-  assert.equal(await routing.get(), "standard");
-  assert.equal(await routing.set("optimal"), "optimal");
-  assert.equal(await routing.get(), "optimal");
-  assert.equal(routing.describe("optimal"), "described optimal");
+  assert.equal(await routing.get(), "sequential");
+  assert.equal(await routing.set("quota-aware"), "quota-aware");
+  assert.equal(await routing.get(), "quota-aware");
+  assert.equal(routing.describe("quota-aware"), "described quota-aware");
 });
 
 test("an empty registry is reported as empty, not thrown", () => {

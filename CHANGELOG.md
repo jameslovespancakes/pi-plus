@@ -11,8 +11,8 @@ rolls into major at 10.
 ### Added
 
 - Multi-account OAuth pools for Kimi Code and xAI/Grok, with duplicate checks,
-  refresh handling, account labels, enable controls, and standard or optimal
-  routing.
+  refresh handling, account labels, enable controls, and sequential or
+  quota-aware routing.
 - An embedded workflow engine with background runs, replay, worktree isolation,
   progress and usage reporting, plus five built-in workflows.
 - A clickable workflow agent board with per-agent activity, chat logs, and targeted follow-ups.
@@ -20,11 +20,14 @@ rolls into major at 10.
 ### Changed
 
 - Releases require an explicit `--release` commit marker or manual `--release` confirmation.
-  Release notes now include every commit since the previous release.
+  Release notes now include every commit since the previous release, and version bumps keep
+  the package lock synchronized.
 - Workflow and OAuth account storage now ship directly in pi-plus instead of
   external pi packages.
 - `/workflow` opens the currently running workflow as a modal agent board.
   Named workflows still run with `/workflow <name>`, and run limits are opt-in.
+- Account routing now uses the same sequential and quota-aware modes across
+  Claude, Codex, Kimi, and Grok; Codex credentials are routed per request.
 - Account lists load providers in parallel, model-quality lookups are cached,
   and footer usage totals are reused until the session changes.
 - Shared JSON writes create parent directories and clean up temporary files.

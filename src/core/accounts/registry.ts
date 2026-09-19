@@ -11,8 +11,8 @@ export interface ManagedAccount {
   primary?: boolean;
 }
 
-/** `standard` prefers primary auth; `optimal` enables provider pooling. */
-export type RoutingMode = "standard" | "optimal";
+/** Fixed account order or provider quota-aware selection. */
+export type RoutingMode = "sequential" | "quota-aware";
 
 export interface AccountUi {
   input(title: string, placeholder?: string): Promise<string | undefined>;

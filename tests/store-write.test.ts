@@ -4,18 +4,23 @@ import { closeSync, existsSync, openSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { loadAccounts, saveAccounts } from "../src/core/anthropic/store.ts";
+import { getRoutingMode, loadAccounts, saveAccounts } from "../src/core/anthropic/store.ts";
 
 function fixture() {
   const cfg = join(tmpdir(), `pp-store-${randomUUID()}.json`);
   const storage = {
     version: 1,
     accounts: [{ id: "a1", label: "A", type: "oauth" as const, enabled: true, access: "t", refresh: "r", expires: 1 }],
-    routing: { mode: "main-first" as const },
+    routing: { mode: "sequential" as const },
   };
   const cleanup = () => [cfg, cfg.replace(/\.json$/, ".state.json")].forEach((p) => rmSync(p, { force: true }));
   return { cfg, storage, cleanup };
 }
+
+test("legacy Claude routing modes migrate to the two public modes", () => {
+  assert.equal(getRoutingMode({ accounts: [], routing: { mode: "main-first" as any } }), "sequential");
+  assert.equal(getRoutingMode({ accounts: [], routing: { mode: "sticky-balanced" as any } }), "quota-aware");
+});
 
 test("a write survives the destination being held open", () => {
   // Windows rejects rename onto a file another handle has open, which is how
@@ -26,7 +31,7 @@ test("a write survives the destination being held open", () => {
 
   const fd = openSync(cfg, "r");
   try {
-    assert.doesNotThrow(() => saveAccounts({ ...storage, routing: { mode: "sticky-balanced" } }, cfg));
+    assert.doesNotThrow(() => saveAccounts({ ...storage, routing: { mode: "quota-aware" } }, cfg));
   } finally {
     closeSync(fd);
   }
@@ -46,8 +51,8 @@ test("a failed write leaves no temp file behind", () => {
 test("writes still land when nothing is holding the file", () => {
   const { cfg, storage, cleanup } = fixture();
   saveAccounts(storage, cfg);
-  saveAccounts({ ...storage, routing: { mode: "sticky-balanced" } }, cfg);
-  assert.equal(loadAccounts(cfg)?.routing?.mode, "sticky-balanced");
+  saveAccounts({ ...storage, routing: { mode: "quota-aware" } }, cfg);
+  assert.equal(loadAccounts(cfg)?.routing?.mode, "quota-aware");
   cleanup();
 });
 

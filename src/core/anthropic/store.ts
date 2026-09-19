@@ -1,14 +1,13 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { normalizeRoutingMode, type AccountRoutingMode } from "../accounts/routing.ts";
 
 /**
  * Anthropic account store.
  *
- * Byte-compatible with @cortexkit/anthropic-auth-core so both implementations
- * can read the same files and reverting stays possible. The split is theirs and
- * is worth preserving: durable identity in `anthropic-auth.json`, live secrets
- * and volatile quota in `anthropic-auth-state.json`.
+ * Keeps durable identity in `anthropic-auth.json` and live secrets and quota
+ * in `anthropic-auth-state.json`.
  *
  *   anthropic-auth.json        id, label, type, enabled, addedAt, routing
  *   anthropic-auth-state.json  access, refresh, expires, quota, lastUsed, ...
@@ -54,7 +53,7 @@ export interface Account {
   apiKey?: string;
 }
 
-export type RoutingMode = "main-first" | "fallback-first" | "sticky-balanced";
+export type RoutingMode = AccountRoutingMode;
 
 export interface Storage {
   version?: number;
@@ -136,7 +135,7 @@ const pick = <T extends object>(source: any, keys: readonly string[]): T =>
   Object.fromEntries(keys.filter((k) => source?.[k] !== undefined).map((k) => [k, source[k]])) as T;
 
 export function emptyStorage(): Storage {
-  return { version: 1, accounts: [], routing: { mode: "main-first" } };
+  return { version: 1, accounts: [], routing: { mode: "sequential" } };
 }
 
 /**
@@ -208,8 +207,7 @@ export const isOAuthAccount = (a: Account): boolean => a.type === "oauth" && !!a
 export const isUsable = (a: Account): boolean => a.enabled !== false && isOAuthAccount(a);
 
 export function getRoutingMode(storage: Storage | undefined): RoutingMode {
-  const mode = storage?.routing?.mode;
-  return mode === "sticky-balanced" || mode === "fallback-first" || mode === "main-first" ? mode : "main-first";
+  return normalizeRoutingMode(storage?.routing?.mode as string | undefined);
 }
 
 export function setRoutingMode(mode: RoutingMode, config = configPath()): Storage {
@@ -228,7 +226,7 @@ export function setRoutingMode(mode: RoutingMode, config = configPath()): Storag
  * the state file is normal.
  *
  * This is easy to mistake for stale data and delete. Doing so breaks
- * `main-first` routing and orphans every routing assignment targeting `main`.
+ * sequential routing and orphans every routing assignment targeting `main`.
  */
 export const MAIN_ACCOUNT_ID = "main";
 

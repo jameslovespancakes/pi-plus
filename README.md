@@ -29,7 +29,7 @@ on any row starts that setup.
 ```
 ──────────────────────────────────────────────────────────
  pi-plus
-› ● Subscriptions   2 accounts · optimal
+› ● Subscriptions   2 accounts · quota-aware
   ● Model Information  catalogue cached
   ● Providers       2 allowed · 4 need approval
   ● Agent Board     not configured
@@ -49,13 +49,13 @@ Nothing else is required, every feature configures itself from within pi.
 ### Pool every subscription
 
 Add multiple Claude, ChatGPT/Codex, Kimi Code, or xAI/Grok accounts. pi-plus
-keeps credentials separate, refreshes them safely, and supports standard or
-optimal routing.
+keeps credentials separate, refreshes them safely, and supports sequential or
+quota-aware routing.
 
 ```
 /accounts add anthropic work
 /accounts add kimi-coding personal
-/routing optimal
+/routing quota-aware
 ```
 
 Your live quota, always in the footer:
@@ -71,8 +71,9 @@ Your live quota, always in the footer:
 With more than two accounts only the two most recently used are listed, so the
 footer stays a fixed height however many you pool.
 
-Account and routing commands are provider-agnostic. Anthropic balances by
-remaining quota and reset time; other providers use a rotating OAuth pool.
+Account and routing commands are provider-agnostic. Sequential routing uses
+account order; quota-aware routing uses reported capacity and fairly probes
+accounts whose provider does not publish quota headers.
 
 ### Pick models on evidence
 
@@ -181,7 +182,7 @@ with workflow options when a task needs them.
 | `/accounts` | account hub: toggle, add, reauth, switch routing |
 | `/accounts add <provider> [label]` | add a subscription |
 | `/accounts reauth <provider> [label]` | reauthorize one |
-| `/routing standard \| optimal` | main-first, or balance by quota |
+| `/routing sequential \| quota-aware` | account order, or remaining capacity |
 | `/usage [on\|off\|text]` | quota bars |
 | `/models [sort]` | ranked catalog |
 | `/model-info <id>` | every benchmark for one model |

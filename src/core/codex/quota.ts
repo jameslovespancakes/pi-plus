@@ -1,5 +1,5 @@
 import type { QuotaSnapshot } from "../anthropic/store.ts";
-import { loadCodexAccounts, saveCodexAccount } from "./store.ts";
+import { MAIN_ACCOUNT_ID, loadCodexAccounts, saveCodexAccount, saveCodexAccounts } from "./store.ts";
 
 /**
  * Codex quota, read from response headers.
@@ -81,7 +81,13 @@ export function applyCodexQuotaHeaders(
 ): boolean {
   const quota = parseCodexQuotaHeaders(headers, now);
   if (!quota) return false;
-  const account = loadCodexAccounts().accounts.find((a) => a.id === accountId);
+  const storage = loadCodexAccounts();
+  if (accountId === MAIN_ACCOUNT_ID) {
+    storage.main = { ...storage.main, quota };
+    saveCodexAccounts(storage);
+    return true;
+  }
+  const account = storage.accounts.find((candidate) => candidate.id === accountId);
   if (!account) return false;
   saveCodexAccount({ ...account, quota });
   return true;

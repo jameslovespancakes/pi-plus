@@ -14,7 +14,7 @@
  *   node scripts/bump-version.mjs --dry-run  # prints only
  */
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -52,6 +52,14 @@ function main() {
   if (!process.argv.includes("--dry-run")) {
     // Preserve formatting/trailing newline so the diff stays to one line.
     writeFileSync(manifestPath, raw.replace(`"version": "${from}"`, `"version": "${to}"`), "utf8");
+
+    const lockPath = join(here, "..", "package-lock.json");
+    if (existsSync(lockPath)) {
+      const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+      lock.version = to;
+      if (lock.packages?.[""]) lock.packages[""].version = to;
+      writeFileSync(lockPath, `${JSON.stringify(lock, null, 2)}\n`, "utf8");
+    }
   }
 
   process.stdout.write(`${to}\n`);

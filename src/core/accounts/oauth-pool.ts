@@ -1,7 +1,8 @@
 import type { OAuthCredential } from "@earendil-works/pi-ai";
 import { agentPath, readJson, writeJson } from "../store.ts";
+import { normalizeRoutingMode, type AccountQuotaState, type AccountRoutingMode } from "./routing.ts";
 
-export type OAuthPoolMode = "standard" | "optimal";
+export type OAuthPoolMode = AccountRoutingMode;
 
 export interface PooledOAuthAccount extends OAuthCredential {
   id: string;
@@ -10,6 +11,7 @@ export interface PooledOAuthAccount extends OAuthCredential {
   identity?: string;
   addedAt: number;
   lastUsed?: number;
+  quota?: AccountQuotaState;
 }
 
 export interface ProviderOAuthPool {
@@ -52,7 +54,7 @@ export function loadOAuthPool(providerId: string, path = oauthPoolPath()): Provi
   const pool = loadFile(path).providers[providerId];
   return {
     accounts: Array.isArray(pool?.accounts) ? pool.accounts : [],
-    mode: pool?.mode === "optimal" ? "optimal" : "standard",
+    mode: normalizeRoutingMode(pool?.mode as string | undefined),
   };
 }
 

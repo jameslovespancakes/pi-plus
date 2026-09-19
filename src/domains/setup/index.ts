@@ -63,7 +63,7 @@ async function inspect(ctx: any): Promise<Feature[]> {
     name: "Subscriptions",
     ready: anySignedIn,
     detail: accountStates.map((state) => state.summary).join("; ") || "no account providers registered",
-    commands: ["/accounts", "/accounts add <provider>", "/routing standard|optimal", "/usage"],
+    commands: ["/accounts", "/accounts add <provider>", "/routing sequential|quota-aware", "/usage"],
     setup: anySignedIn ? undefined : "/accounts add anthropic",
     open: "/accounts",
   });

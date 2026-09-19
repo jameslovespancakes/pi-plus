@@ -6,7 +6,6 @@ import {
   loadAccounts,
   saveAccount,
   setRoutingMode,
-  type RoutingMode as StoreRoutingMode,
 } from "../../../core/anthropic/store.ts";
 
 /**
@@ -21,16 +20,6 @@ import {
  * call here threw and the account list silently came back empty. It now uses
  * the extracted store directly.
  */
-
-/** The registry's vocabulary maps onto the store's routing modes. */
-const MODE_TO_STORE: Record<RoutingMode, StoreRoutingMode> = {
-  standard: "main-first",
-  optimal: "sticky-balanced",
-};
-
-function fromStoreMode(mode: string): RoutingMode {
-  return mode === "sticky-balanced" ? "optimal" : "standard";
-}
 
 async function authenticate(ctx: AccountContext): Promise<{ access: string; refresh: string; expires: number } | undefined> {
   const auth = await authorize("max");
@@ -133,17 +122,16 @@ export const anthropicAccounts: AccountProvider = {
 
   routing: {
     async get(): Promise<RoutingMode> {
-      return fromStoreMode(getRoutingMode(loadAccounts()));
+      return getRoutingMode(loadAccounts());
     },
     async set(mode: RoutingMode): Promise<RoutingMode> {
-      setRoutingMode(MODE_TO_STORE[mode]);
+      setRoutingMode(mode);
       return mode;
     },
     describe(mode: RoutingMode): string {
-      return mode === "optimal"
-        ? "Balances sessions across subscriptions using remaining quota and time until reset. "
-          + "Keeps session caches sticky; migrates on confirmed exhaustion."
-        : "Main subscription first, then eligible fallbacks.";
+      return mode === "quota-aware"
+        ? "Uses the Claude subscription with the most remaining quota."
+        : "Uses Claude subscriptions in order, moving on when one is exhausted.";
     },
   },
 };

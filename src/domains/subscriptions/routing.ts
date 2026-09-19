@@ -2,16 +2,16 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { accountProvider, routableProviders, type RoutingMode } from "../../core/accounts/registry.ts";
 
 /**
- * `/routing [standard|optimal] [provider]`
+ * `/routing [sequential|quota-aware] [provider]`
  *
- *   standard  main account first, fall back only when exhausted
- *   optimal   balance across accounts by remaining quota and time to reset
+ *   sequential   account 1, then account 2 when the first is exhausted
+ *   quota-aware  use the account with the most remaining capacity
  *
  * With no provider named, the mode is applied to every provider that supports
  * routing. With no mode, the current modes are reported.
  */
 
-const MODES: RoutingMode[] = ["standard", "optimal"];
+const MODES: RoutingMode[] = ["sequential", "quota-aware"];
 
 function isMode(value: string): value is RoutingMode {
   return (MODES as string[]).includes(value);
@@ -19,12 +19,20 @@ function isMode(value: string): value is RoutingMode {
 
 export function registerRoutingCommands(pi: ExtensionAPI): void {
   pi.registerCommand("routing", {
-    description: "Account routing: standard (main first) or optimal (quota balanced)",
-    getArgumentCompletions: (prefix) =>
-      MODES.filter((mode) => mode.startsWith(prefix)).map((mode) => ({
-        value: mode,
-        label: mode === "optimal" ? "optimal: balance by remaining quota" : "standard: main account first",
-      })),
+    description: "Account routing: sequential or quota-aware",
+    getArgumentCompletions: (prefix) => {
+      const [mode, providerPrefix = ""] = prefix.trim().split(/\s+/, 2);
+      if (!/\s/.test(prefix)) {
+        return MODES.filter((candidate) => candidate.startsWith(mode ?? "")).map((candidate) => ({
+          value: candidate,
+          label: candidate === "quota-aware" ? "quota-aware: use remaining capacity" : "sequential: account 1, then 2",
+        }));
+      }
+      if (!mode || !isMode(mode)) return [];
+      return routableProviders()
+        .filter((provider) => provider.id.startsWith(providerPrefix))
+        .map((provider) => ({ value: `${mode} ${provider.id}`, label: provider.id }));
+    },
     handler: async (args, ctx) => {
       const [first, second] = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
       const providers = second ? [accountProvider(second)].filter((entry) => !!entry) : routableProviders();
@@ -53,7 +61,7 @@ export function registerRoutingCommands(pi: ExtensionAPI): void {
       }
 
       if (!isMode(first)) {
-        ctx.ui.notify(`Usage: /routing [standard|optimal] [provider]`, "warning");
+        ctx.ui.notify(`Usage: /routing [sequential|quota-aware] [provider]`, "warning");
         return;
       }
 

@@ -5,8 +5,6 @@ import {
 } from "../../core/anthropic/client-identity.ts";
 import { ANTHROPIC_MODELS } from "../../core/anthropic/models.ts";
 import { applyQuotaHeaders, refreshAllQuota } from "../../core/anthropic/quota.ts";
-import { applyCodexQuotaHeaders } from "../../core/codex/quota.ts";
-import { loadCodexAccounts } from "../../core/codex/store.ts";
 import {
   MAIN_ACCOUNT_ID, familyForModel, selectAccount, type Candidate,
 } from "../../core/anthropic/routing.ts";
@@ -29,6 +27,7 @@ function isAnthropicMessagesPayload(payload: any): boolean {
 }
 
 let lastSelected: { id: string; at: number } | undefined;
+const accountLastUsed = new Map<string, number>();
 
 /** Which account served the most recent request, for the UI. */
 export function lastRoutedAccount(): { id: string; at: number } | undefined {
@@ -44,10 +43,23 @@ export function routeAccessToken(primary: string, modelId?: string, _sessionId?:
   const family = familyForModel(modelId);
 
   const candidates: Candidate[] = [
-    { id: MAIN_ACCOUNT_ID, access: primary, quota: storage.main?.quota as any, order: 0 },
+    {
+      id: MAIN_ACCOUNT_ID,
+      access: primary,
+      quota: storage.main?.quota as any,
+      order: 0,
+      lastUsed: accountLastUsed.get(MAIN_ACCOUNT_ID) ?? Number(storage.main?.lastUsed ?? 0),
+    },
     ...storage.accounts
       .filter((a) => a.enabled !== false && a.type === "oauth" && a.access)
-      .map((a, index) => ({ id: a.id, access: a.access, quota: a.quota, order: index + 1, account: a })),
+      .map((a, index) => ({
+        id: a.id,
+        access: a.access,
+        quota: a.quota,
+        order: index + 1,
+        lastUsed: accountLastUsed.get(a.id) ?? a.lastUsed ?? 0,
+        account: a,
+      })),
   ];
 
   // Nothing to choose between: keep pi's own credential.
@@ -62,6 +74,7 @@ export function routeAccessToken(primary: string, modelId?: string, _sessionId?:
 
   const now = Date.now();
   lastSelected = { id: picked.candidate.id, at: now };
+  accountLastUsed.set(picked.candidate.id, now);
   if (picked.candidate.account) {
     // Minute precision avoids a credential write on every request.
     const previous = picked.candidate.account.lastUsed ?? 0;
@@ -134,24 +147,6 @@ export function registerAnthropicProvider(pi: ExtensionAPI): void {
       applyQuotaHeaders(routed.id, event?.headers);
     } catch {
       // Never let bookkeeping disturb a response.
-    }
-  });
-
-  /** Updates Codex quota from response headers. */
-  pi.on("after_provider_response", (event: any) => {
-    const headers = event?.headers;
-    if (!headers) return;
-    const hasCodexQuota = Object.keys(headers).some((k) => k.toLowerCase().startsWith("x-codex-"));
-    if (!hasCodexQuota) return;
-    try {
-      const sent = event?.request?.headers ?? {};
-      const accountId = sent["chatgpt-account-id"] ?? sent["Chatgpt-Account-Id"];
-      const match = loadCodexAccounts().accounts.find(
-        (a) => (accountId ? a.accountId === accountId : false) || a.enabled !== false,
-      );
-      if (match) applyCodexQuotaHeaders(match.id, headers);
-    } catch {
-      // Bookkeeping only.
     }
   });
 

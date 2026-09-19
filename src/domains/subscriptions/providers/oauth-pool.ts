@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ModelAuth, OAuthAuth, OAuthCredential, Provider } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AccountContext, AccountProvider, ManagedAccount, RoutingMode } from "../../../core/accounts/registry.ts";
+import { quotaStateFromHeaders, selectRoutingCandidate, type AccountQuotaState } from "../../../core/accounts/routing.ts";
 import {
   loadOAuthPool,
   oauthIdentity,
@@ -18,6 +19,7 @@ export interface PooledOAuthProviderSpec {
 }
 
 const lastUsed = new Map<string, number>();
+const primaryQuota = new Map<string, AccountQuotaState>();
 const refreshes = new Map<string, Promise<PooledOAuthAccount>>();
 
 function oauthFor(spec: PooledOAuthProviderSpec): OAuthAuth {
@@ -147,9 +149,9 @@ export function createPooledOAuthAdapter(spec: PooledOAuthProviderSpec): Account
         return mode;
       },
       describe(mode): string {
-        return mode === "optimal"
-          ? `Rotates requests across enabled ${spec.label} subscriptions.`
-          : `Uses the primary ${spec.label} subscription.`;
+        return mode === "quota-aware"
+          ? `Uses ${spec.label} quota headers when available, otherwise rotates fairly.`
+          : `Uses ${spec.label} accounts in order, moving on when one is rate-limited.`;
       },
     },
   };
@@ -160,22 +162,25 @@ function chooseCredential(
   primary: OAuthCredential,
 ): { id: string; credential: OAuthCredential; account?: PooledOAuthAccount } {
   const pool = loadOAuthPool(spec.id);
-  if (pool.mode === "standard") return { id: "main", credential: primary };
-
   const candidates = [
-    { id: "main", credential: primary, usedAt: lastUsed.get(`${spec.id}:main`) ?? 0, order: 0 },
+    {
+      id: "main",
+      order: 0,
+      lastUsed: lastUsed.get(`${spec.id}:main`) ?? 0,
+      quota: primaryQuota.get(spec.id),
+      value: { id: "main", credential: primary },
+    },
     ...pool.accounts
       .filter((account) => account.enabled !== false && account.access)
       .map((account, index) => ({
         id: account.id,
-        credential: account,
-        account,
-        usedAt: lastUsed.get(`${spec.id}:${account.id}`) ?? account.lastUsed ?? 0,
         order: index + 1,
+        lastUsed: lastUsed.get(`${spec.id}:${account.id}`) ?? account.lastUsed ?? 0,
+        quota: account.quota,
+        value: { id: account.id, credential: account, account },
       })),
   ];
-  candidates.sort((left, right) => left.usedAt - right.usedAt || left.order - right.order);
-  return candidates[0];
+  return selectRoutingCandidate(candidates, pool.mode)?.value ?? { id: "main", credential: primary };
 }
 
 async function freshCredential(spec: PooledOAuthProviderSpec, account: PooledOAuthAccount, signal: AbortSignal): Promise<PooledOAuthAccount> {
@@ -218,6 +223,14 @@ export function registerPooledOAuthProvider(pi: ExtensionAPI, spec: PooledOAuthP
   const oauth = provider.auth.oauth;
   if (!oauth) return;
 
+  const withQuotaObserver = (options: any) => ({
+    ...options,
+    onResponse: async (response: { status: number; headers: Record<string, string> }, model: unknown) => {
+      recordQuotaResponse(spec, requestAccessToken(options), response.status, response.headers);
+      await options?.onResponse?.(response, model);
+    },
+  });
+
   pi.registerProvider({
     ...provider,
     auth: {
@@ -227,5 +240,34 @@ export function registerPooledOAuthProvider(pi: ExtensionAPI, spec: PooledOAuthP
         toAuth: (primary) => routedAuth(spec, oauth, primary),
       },
     },
+    stream: (model: any, context: any, options: any) => provider.stream(model, context, withQuotaObserver(options)),
+    streamSimple: (model: any, context: any, options: any) => provider.streamSimple(model, context, withQuotaObserver(options)),
   });
+}
+
+function requestAccessToken(options: any): string | undefined {
+  if (typeof options?.apiKey === "string") return options.apiKey;
+  const headers = options?.headers;
+  if (!headers || typeof headers !== "object") return undefined;
+  const authorization = Object.entries(headers).find(([key]) => key.toLowerCase() === "authorization")?.[1];
+  if (typeof authorization !== "string") return undefined;
+  const match = /^Bearer\s+(.+)$/i.exec(authorization);
+  return match?.[1];
+}
+
+function recordQuotaResponse(
+  spec: PooledOAuthProviderSpec,
+  access: string | undefined,
+  status: number,
+  headers: Record<string, string>,
+): void {
+  if (!access) return;
+  const pool = loadOAuthPool(spec.id);
+  const account = pool.accounts.find((candidate) => candidate.access === access);
+  const previous = account?.quota ?? primaryQuota.get(spec.id);
+  const quota = quotaStateFromHeaders(status, headers, previous);
+  if (!quota || quota === previous) return;
+
+  if (account) saveOAuthAccount(spec.id, { ...account, quota });
+  else primaryQuota.set(spec.id, quota);
 }

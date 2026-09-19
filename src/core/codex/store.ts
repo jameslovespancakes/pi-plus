@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { QuotaSnapshot } from "../anthropic/store.ts";
 
@@ -26,38 +26,41 @@ export interface CodexAccount {
   plan?: string;
   addedAt?: number;
   lastRefreshedAt?: number;
+  lastUsed?: number;
+  blockedUntil?: number;
   quota?: QuotaSnapshot;
 }
 
 export interface CodexStorage {
   accounts: CodexAccount[];
+  main?: { quota?: QuotaSnapshot; lastUsed?: number; blockedUntil?: number };
   routing?: { mode?: string };
 }
 
 export const MAIN_ACCOUNT_ID = "main";
 
-function storePath(): string {
-  return join(homedir(), ".pi", "agent", "codex-accounts.json");
+export function codexAccountsPath(): string {
+  return process.env.PI_PLUS_CODEX_ACCOUNTS_FILE ?? join(homedir(), ".pi", "agent", "codex-accounts.json");
 }
 
-export function loadCodexAccounts(path = storePath()): CodexStorage {
+export function loadCodexAccounts(path = codexAccountsPath()): CodexStorage {
   try {
     const raw = JSON.parse(readFileSync(path, "utf8"));
     const accounts = Array.isArray(raw?.accounts) ? raw.accounts : [];
-    return { accounts, routing: raw?.routing };
+    return { accounts, main: raw?.main, routing: raw?.routing };
   } catch {
     return { accounts: [] };
   }
 }
 
-export function saveCodexAccounts(storage: CodexStorage, path = storePath()): void {
-  mkdirSync(join(homedir(), ".pi", "agent"), { recursive: true });
+export function saveCodexAccounts(storage: CodexStorage, path = codexAccountsPath()): void {
+  mkdirSync(dirname(path), { recursive: true });
   // 0600: these are live OAuth credentials.
   writeFileSync(path, JSON.stringify(storage, null, 2) + "\n", { mode: 0o600 });
 }
 
 /** Inserts or replaces one account, leaving the others untouched. */
-export function saveCodexAccount(account: CodexAccount, path = storePath()): void {
+export function saveCodexAccount(account: CodexAccount, path = codexAccountsPath()): void {
   const storage = loadCodexAccounts(path);
   const index = storage.accounts.findIndex((a) => a.id === account.id);
   if (index >= 0) storage.accounts[index] = { ...storage.accounts[index], ...account };
@@ -65,7 +68,7 @@ export function saveCodexAccount(account: CodexAccount, path = storePath()): voi
   saveCodexAccounts(storage, path);
 }
 
-export function removeCodexAccount(id: string, path = storePath()): boolean {
+export function removeCodexAccount(id: string, path = codexAccountsPath()): boolean {
   const storage = loadCodexAccounts(path);
   const before = storage.accounts.length;
   storage.accounts = storage.accounts.filter((a) => a.id !== id);
