@@ -28,6 +28,7 @@
     "config/skills",
     "config/pi-plus.example.json",
     "images",
+    "CHANGELOG.md",
     "README.md",
     "LICENSE"
   ],

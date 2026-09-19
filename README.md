@@ -7,8 +7,11 @@
 **Everything [pi](https://pi.dev/) is missing, in one install.**
 
 [![npm](https://img.shields.io/npm/v/@jameslovespancakes/pi-plus?color=%234D9ABF&label=npm)](https://www.npmjs.com/package/@jameslovespancakes/pi-plus)
+[![CI](https://github.com/jameslovespancakes/pi-plus/actions/workflows/ci.yml/badge.svg)](https://github.com/jameslovespancakes/pi-plus/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-MIT-F1BE58)](LICENSE)
 [![pi-package](https://img.shields.io/badge/pi--package-F09082)](https://pi.dev/packages)
+
+[Changelog](CHANGELOG.md) · [Releases](https://github.com/jameslovespancakes/pi-plus/releases)
 
 </div>
 

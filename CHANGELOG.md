@@ -1,0 +1,87 @@
+# Changelog
+
+All notable changes to this project are documented here.
+
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and versions follow an odometer scheme: patch rolls into minor at 100, minor
+rolls into major at 10.
+
+## [Unreleased]
+
+### Added
+
+- A `CHANGELOG.md`, and GitHub releases whose notes are generated from it.
+  `scripts/changelog.mjs --promote` retitles `## [Unreleased]` as the new
+  version at release time, so entries are written without needing to know the
+  next version number.
+
+## [1.0.2] - 2026-09-19
+
+### Fixed
+
+- Release tags now reach the remote. `git tag` creates a lightweight tag and
+  `git push --follow-tags` pushes only annotated ones, so every tag was
+  silently dropped while the job still reported success.
+- The release job name no longer renders twice. GitHub prefixes a reusable
+  workflow's job name with the caller's, so naming both produced
+  `Lint / Typecheck / Tests / Lint / Typecheck / Tests`.
+
+## [1.0.1] - 2026-09-19
+
+### Added
+
+- Releases are gated on lint, typecheck and tests as a separate job.
+  Publishing cannot begin unless every check passes, rather than relying on
+  step ordering inside one job.
+
+### Changed
+
+- CI and release run on Node 24, which ships the npm 11.5.1+ required for
+  trusted publishing.
+- `actions/checkout` and `actions/setup-node` upgraded to v5; v4 targets the
+  deprecated Node 20 runtime.
+
+## [1.0.0] - 2026-09-19
+
+First published release.
+
+### Added
+
+- **Subscription accounts.** Multiple Anthropic and Codex subscriptions in one
+  pool, with quota-aware routing. `/accounts` lists every provider's accounts
+  and toggles them in place; `/accounts add` and `/accounts rename` run as
+  wizards.
+- **Codex multi-account.** PKCE OAuth, per-account quota from `x-codex-*`
+  response headers, and duplicate detection by ChatGPT account id so two
+  entries cannot share one quota pool.
+- **Quota from response headers.** Anthropic reports utilisation on every
+  reply, so the account serving traffic refreshes at no request cost. Idle
+  accounts are polled at most once per 10 minutes, triggered by sending a
+  message rather than a timer.
+- **Usage HUD.** Pooled 5h, weekly and per-model tiers for Claude, and 5h and
+  weekly for Codex, served from cached snapshots.
+- **Model catalogue and billing policy.** `/models`, `/model-info` and
+  `/provider` with benchmark-driven selection and an approval gate.
+- **Agent board.** `/board` for live cross-agent messaging.
+- **Remote workers.** `/remote` for capacity-gated test and build workers.
+- **Own the Anthropic provider.** OAuth, routing, quota and client identity
+  are implemented in this repository rather than pulled from a dependency.
+
+### Fixed
+
+- The account list and `/usage` both returned empty because they still
+  imported a package that had been removed during the provider extraction.
+  The failure was swallowed, so it looked like "no accounts" rather than an
+  error.
+- Cached usage rows omitted `checkedAt`, so freshness checks discarded every
+  one and the HUD read `unknown/stale` with no bars.
+- The provider picker redrew the whole screen on each toggle. It now updates
+  in place inside pi's own inline chrome.
+- Scoped per-model limits were labelled from Anthropic's internal id, which
+  truncated to `claude` and named neither the window nor the model. They now
+  show the model family, for example `Fable`.
+
+[Unreleased]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.1...v1.0.2
+[1.0.1]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.0...v1.0.1
+[1.0.0]: https://github.com/jameslovespancakes/pi-plus/releases/tag/v1.0.0
