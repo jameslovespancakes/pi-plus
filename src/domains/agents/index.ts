@@ -174,7 +174,7 @@ class BoardView implements Component, Focusable {
     this.input.onEscape = () => this.close();
     this.unsubscribe = client.on((event) => {
       if (event.t === "connection") {
-        this.error = event.connected ? undefined : "Messaging Board is offline — reconnecting…";
+        this.error = event.connected ? undefined : "Messaging Board is offline, reconnecting…";
         if (event.connected) void this.load();
         this.tui.requestRender();
         return;
@@ -254,7 +254,7 @@ class BoardView implements Component, Focusable {
             ? th.bg("selectedBg", th.fg("accent", th.bold(label)))
             : th.fg("muted", label);
         }).join(th.fg("dim", "│"))
-      : th.fg("dim", this.initialRecipients ? ` New chat: ${this.initialRecipients.join(", ")} ` : " No chats — use /board <agent> to start one ");
+      : th.fg("dim", this.initialRecipients ? ` New chat: ${this.initialRecipients.join(", ")} ` : " No chats. Use /board <agent> to start one ");
     const messageLines: string[] = [];
     for (const message of this.messages) {
       const time = new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -334,7 +334,7 @@ export default function (pi: ExtensionAPI) {
       return `- ${agent.alias || agent.sessionId.slice(0, 8)}@${agent.host}${role}: ${activity}; ${agent.branch || "-"}@${commit}${divergent}${agent.lastPrompt ? `; ${agent.lastPrompt}` : ""}`;
     });
     return [
-      `[Live agent board — consult before working]`,
+      `[Live agent board, consult before working]`,
       `Your commit: ${gitInfo.branch || "-"}@${gitInfo.commit?.slice(0, 12) || "no-commit"}`,
       `Running collaborators:`,
       lines.join("\n"),
@@ -348,7 +348,7 @@ export default function (pi: ExtensionAPI) {
     if (event.t !== "message" || event.adminView || !ctx) return;
     const message = event.message as BoardMessage;
     const thread = event.thread as ThreadInfo;
-    const content = `[Live agent-board message${message.priority === "urgent" ? " — URGENT" : ""}]\nFrom: ${message.senderAlias || message.senderId}\nThread: ${thread.title || thread.id}\nCommit context: you are on ${gitInfo.branch || "-"}@${gitInfo.commit?.slice(0, 12) || "no-commit"}\n\n${message.text}\n\nEvaluate this at the next decision point. If relevant, adjust your work and reply through agent_board with thread '${thread.id}'. If irrelevant, continue the current task.`;
+    const content = `[Live agent-board message${message.priority === "urgent" ? " URGENT" : ""}]\nFrom: ${message.senderAlias || message.senderId}\nThread: ${thread.title || thread.id}\nCommit context: you are on ${gitInfo.branch || "-"}@${gitInfo.commit?.slice(0, 12) || "no-commit"}\n\n${message.text}\n\nEvaluate this at the next decision point. If relevant, adjust your work and reply through agent_board with thread '${thread.id}'. If irrelevant, continue the current task.`;
     if (message.priority === "urgent" && !ctx.isIdle()) ctx.abort();
     pi.sendMessage({ customType: "agent-board", content, display: true, details: { message, thread } }, { deliverAs: "steer", triggerTurn: true });
   });
@@ -395,7 +395,7 @@ export default function (pi: ExtensionAPI) {
   registerBoardLifecycle(pi);
 
   pi.registerCommand("board", {
-    description: "Live agent board — or setup | restart | clear | status",
+    description: "Live agent board, or setup | restart | clear | status",
     getArgumentCompletions: (prefix) =>
       ["setup", "restart", "clear", "status"]
         .filter((option) => option.startsWith(prefix))

@@ -8,7 +8,7 @@ import { formatTokens, sanitize } from "../../ui/format.ts";
  * Single-line session footer (no working-directory line) with the subscription
  * bars rendered directly underneath it.
  *
- * The footer no longer owns the poll loop — it subscribes to usage-service and
+ * The footer no longer owns the poll loop; it subscribes to usage-service and
  * re-renders on change. That is what lets non-UI consumers get fresh data.
  */
 

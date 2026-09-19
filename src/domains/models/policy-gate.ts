@@ -8,8 +8,8 @@ import {
   providerState,
   revoke,
   toggleProvider,
-  type ProviderState,
 } from "../../core/policy/policy.ts";
+import { openProviderPicker, STATE_TEXT, type ProviderRow, type StateKey } from "./provider-picker.ts";
 
 /**
  * Enforces the approval policy at the provider boundary, so it also covers
@@ -20,35 +20,8 @@ class ModelPolicyError extends Error {
   code = "MODEL_POLICY_BLOCKED";
 }
 
-const LABEL: Record<ProviderState, string> = {
-  auto: "always allowed",
-  approved: "approved this session",
-  blocked: "needs approval",
-  denied: "denied in policy",
-};
-
-function renderRow(entry: { provider: string; display: string; state: ProviderState }, width: number): string {
-  const mark = entry.state === "auto" || entry.state === "approved" ? "✓" : " ";
-  return `[${mark}] ${entry.display.padEnd(width)}  ${LABEL[entry.state]}`;
-}
-
-/**
- * Every provider the user actually has credentials for, plus any the policy
- * gates. Derived at call time so a newly authenticated provider shows up
- * without touching config.
- */
-/**
- * Providers are free to decorate their own name — the CortexKit package calls
- * itself "Anthropic (CortexKit OAuth)". The implementation detail is noise in a
- * policy list, so the parenthetical is dropped.
- */
-function cleanName(name: string): string {
-  return name.replace(/\s*\([^)]*\)\s*$/, "").trim() || name;
-}
-
-async function listProviders(ctx: any): Promise<{ provider: string; display: string; state: ProviderState }[]> {
+async function providerRows(ctx: any): Promise<ProviderRow[]> {
   const ids = new Set<string>();
-
   try {
     for (const model of await ctx.modelRegistry.getAvailable()) ids.add(model.provider);
   } catch { /* registry unavailable */ }
@@ -59,21 +32,37 @@ async function listProviders(ctx: any): Promise<{ provider: string; display: str
     } catch { /* keep it if the status cannot be read */ }
   }
 
-  // Gated providers stay listed even with no credentials, so the policy is visible.
+  // Gated providers stay listed without credentials so the policy stays visible.
   for (const id of gatedProviders()) ids.add(id);
 
-  return [...ids].sort().map((provider) => ({
-    provider,
-    display: (() => {
-      try {
-        return cleanName(ctx.modelRegistry.getProviderDisplayName(provider) || provider);
-      } catch {
-        return provider;
-      }
-    })(),
-    state: providerState(provider),
-  }));
+  return [...ids].sort().map((provider) => {
+    let display = provider;
+    try {
+      display = cleanName(ctx.modelRegistry.getProviderDisplayName(provider) || provider);
+    } catch { /* fall back to the id */ }
+    return {
+      id: provider,
+      provider,
+      display,
+      state: providerState(provider) as ProviderRow["state"],
+    };
+  });
 }
+
+/**
+ * Every provider the user actually has credentials for, plus any the policy
+ * gates. Derived at call time so a newly authenticated provider shows up
+ * without touching config.
+ */
+/**
+ * Providers are free to decorate their own name. The CortexKit package calls
+ * itself "Anthropic (CortexKit OAuth)". The implementation detail is noise in a
+ * policy list, so the parenthetical is dropped.
+ */
+function cleanName(name: string): string {
+  return name.replace(/\s*\([^)]*\)\s*$/, "").trim() || name;
+}
+
 
 export function registerPolicyGate(pi: ExtensionAPI): void {
   let wrapped = false;
@@ -157,38 +146,21 @@ export function registerPolicyGate(pi: ExtensionAPI): void {
         return;
       }
 
-      // Bare /provider: the toggle picker.
-      const initial = await listProviders(ctx);
+      const rows = await providerRows(ctx);
+
+      // Headless: plain text, no cursor to draw.
       if (!ctx.hasUI) {
         ctx.ui.notify(
-          initial.map((entry) => `${entry.state === "blocked" || entry.state === "denied" ? "[ ]" : "[✓]"} ${entry.display} — ${LABEL[entry.state]}`).join("\n"),
+          rows.map((row) => `${row.state === "auto" || row.state === "approved" ? "[on] " : "[off]"} ${row.display}: ${STATE_TEXT[row.state]}`).join("\n"),
           "info",
         );
         return;
       }
 
-      // Stay open so several providers can be toggled in one visit; ui.select
-      // resolves to undefined on escape, which ends the loop.
-      for (;;) {
-        const entries = await listProviders(ctx);
-        if (entries.length === 0) {
-          ctx.ui.notify("No providers are configured. Sign in with /account or pi auth.", "info");
-          return;
-        }
-
-        const width = Math.max(...entries.map((entry) => entry.display.length));
-        const rows = entries.map((entry) => renderRow(entry, width));
-        const choice = await ctx.ui.select("Providers — enter toggles, esc closes", rows);
-        if (!choice) return;
-
-        const target = entries[rows.indexOf(choice)];
-        if (!target) return;
-        if (target.state === "denied") {
-          ctx.ui.notify(`${target.display} is denied in policy. Edit pi-plus.json to change that.`, "warning");
-          continue;
-        }
-        toggleProvider(target.provider);
-      }
+      await openProviderPicker(ctx, {
+        rows: () => providerRows(ctx),
+        toggle: (provider) => toggleProvider(provider) as StateKey,
+      });
     },
   });
 }

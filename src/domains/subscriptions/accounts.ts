@@ -9,7 +9,7 @@ import {
 } from "../../core/accounts/registry.ts";
 
 /**
- * `/account [provider] [add|reauth]` — provider-agnostic account management.
+ * `/account [provider] [add|reauth]` is provider-agnostic account management.
  *
  *   /account                    every provider and its accounts
  *   /account anthropic          that provider's accounts
@@ -67,7 +67,7 @@ async function listAll(ctx: any): Promise<void> {
         `${provider.label} (${provider.id})${routing}`,
         ...(accounts.length > 0
           ? accounts.map((account) => `  ${describe(account)}`)
-          : [`  no additional accounts — /account ${provider.id} add`]),
+          : [`  no additional accounts, add one with /account ${provider.id} add`]),
       );
     } catch (error) {
       blocks.push(`${provider.label} (${provider.id}): ${error instanceof Error ? error.message : String(error)}`);
@@ -91,7 +91,7 @@ async function buildHub(): Promise<{ labels: string[]; entries: HubEntry[] }> {
     try {
       accounts = await provider.list();
     } catch (error) {
-      labels.push(`${provider.label} — ${error instanceof Error ? error.message : String(error)}`);
+      labels.push(`${provider.label}: ${error instanceof Error ? error.message : String(error)}`);
       entries.push({ kind: "error" });
       continue;
     }
@@ -108,7 +108,7 @@ async function buildHub(): Promise<{ labels: string[]; entries: HubEntry[] }> {
     const width = Math.max(8, ...accounts.map((account) => account.label.length));
     for (const account of accounts) {
       const expired = account.expiresAt !== undefined && account.expiresAt < Date.now();
-      const state = !account.enabled ? "disabled" : expired ? "expired — needs reauth" : "active";
+      const state = !account.enabled ? "disabled" : expired ? "expired, needs reauth" : "active";
       labels.push(`  [${account.enabled ? "✓" : " "}] ${account.label.padEnd(width)}  ${state}`);
       entries.push({ kind: "account", provider, account });
     }
@@ -128,7 +128,7 @@ async function hub(pi: ExtensionAPI, ctx: any): Promise<void> {
       return;
     }
 
-    const choice = await ctx.ui.select("Accounts — enter toggles, esc closes", labels);
+    const choice = await ctx.ui.select("Accounts", labels);
     if (!choice) return;
     const entry = entries[labels.indexOf(choice)];
     if (!entry || entry.kind === "error") continue;

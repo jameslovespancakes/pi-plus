@@ -6,7 +6,7 @@
  * is that `/account` and `/routing` contain no provider-specific logic, so a
  * second provider is a new adapter rather than a new command surface.
  *
- * Structural types only — nothing here imports pi.
+ * Structural types only; nothing here imports pi.
  */
 
 export interface ManagedAccount {

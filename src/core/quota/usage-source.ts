@@ -136,7 +136,7 @@ export async function fetchClaudeRows(ctx: any): Promise<{ rows: UsageRow[]; err
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       errors.push(/invalid_grant/i.test(message)
-        ? `${entry.group}: login expired — /account anthropic reauth ${entry.account?.label ?? entry.account?.id ?? ""}`.trim()
+        ? `${entry.group}: login expired, run /account anthropic reauth ${entry.account?.label ?? entry.account?.id ?? ""}`.trim()
         : `${entry.group}: ${message}`);
     }
   }

@@ -158,7 +158,7 @@ function formatTable(entries: Entry[]): string {
 
 function formatFull(entry: Entry): string {
   const lines = [
-    `${entry.id}${entry.benchmarkName ? `  —  ${entry.benchmarkName}` : ""}`,
+    `${entry.id}${entry.benchmarkName ? `  ${entry.benchmarkName}` : ""}`,
     `  billing: ${entry.billing}${entry.quotaLeftPercent !== undefined ? ` · quota left ${entry.quotaLeftPercent}%` : ""}`,
     `  context: ${entry.contextWindow.toLocaleString()} · max out: ${entry.maxTokens.toLocaleString()} · reasoning: ${entry.reasoning}`,
     `  released: ${entry.releaseDate ?? "unknown"} · benchmark confidence: ${entry.confidence} (${entry.basis})`,
@@ -261,11 +261,11 @@ export function registerCatalogTool(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("model-info", {
-    description: "Benchmarks for one model id — or `refresh` / `setup`",
+    description: "Benchmarks for one model id, or `refresh` / `setup`",
     getArgumentCompletions: (prefix) =>
       [
-        { value: "refresh", label: "refresh — force a benchmark refresh" },
-        { value: "setup", label: "setup — add the Artificial Analysis API key" },
+        { value: "refresh", label: "refresh: force a benchmark refresh" },
+        { value: "setup", label: "setup: add the Artificial Analysis API key" },
       ].filter((option) => option.value.startsWith(prefix)),
     handler: async (args, ctx) => {
       const needle = args.trim().toLowerCase();
@@ -318,7 +318,7 @@ export function registerCatalogTool(pi: ExtensionAPI): void {
           );
           return;
         }
-        ctx.ui.notify(`Verified — ${qualityRecordCount()} models loaded from Artificial Analysis.`, "info");
+        ctx.ui.notify(`Verified. ${qualityRecordCount()} models loaded from Artificial Analysis.`, "info");
         return;
       }
 
@@ -342,7 +342,7 @@ export function registerCatalogTool(pi: ExtensionAPI): void {
       }
 
       if (!needle) {
-        ctx.ui.notify("Usage: /model-info <model id substring> — or /model-info refresh | setup", "warning");
+        ctx.ui.notify("Usage: /model-info <model id substring>, or /model-info refresh | setup", "warning");
         return;
       }
 

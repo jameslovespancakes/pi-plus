@@ -25,7 +25,7 @@ function buildColumns(state: UsageState, modelId?: string): { claude: Cell[]; co
     pooled(state, "5h") ?? { label: "5h" },
     { ...(pooled(state, "7d") ?? { label: "7d" }), label: "weekly" },
     ...scopes.map((scoped) => ({ ...(pooled(state, scoped) ?? { label: scoped }), label: scoped.replace("7d ", "") })),
-    ...(scopes.length ? [] : [{ label: "—" }]),
+    ...(scopes.length ? [] : [{ label: "-" }]),
   ];
   claude[0] = { ...claude[0], label: "5h" };
 
@@ -39,7 +39,7 @@ function buildColumns(state: UsageState, modelId?: string): { claude: Cell[]; co
   return { claude, codex };
 }
 
-/** `Work 61% · Personal 88%` — empty when there is nothing extra to say. */
+/** `Work 61% · Personal 88%`. Empty when there is nothing extra to say. */
 function renderAccountSummary(state: UsageState, cellWidth: number): string | undefined {
   const stamps = state.lastUsedAt ?? {};
   const groups = [...new Set(state.rows.filter(isClaudeAccount).map((row) => row.group))];
@@ -51,7 +51,7 @@ function renderAccountSummary(state: UsageState, cellWidth: number): string | un
   const parts = shown.map((group) => {
     const row = state.rows.find((candidate) => candidate.group === group && candidate.label === "5h");
     const name = group.replace(/^Claude /, "");
-    if (!row) return `${name} —`;
+    if (!row) return `${name} -`;
     return `${name} ${Math.round(row.remaining)}%${row.stale ? "*" : ""}`;
   });
 

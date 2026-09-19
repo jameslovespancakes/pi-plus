@@ -8,7 +8,7 @@ import { parseTarget, readSshHosts, type SshHost } from "../../core/exec/ssh-con
 import { readRemote, writeRemoteWorkers, type RemoteWorkerRecord } from "./config-path.ts";
 
 /**
- * `/remote` — the management surface for remote test workers.
+ * `/remote` is the management surface for remote test workers.
  *
  *   /remote setup    hub: toggle, add, rename, remove (bare /remote is the same)
  *   /remote add      jump straight to the add wizard
@@ -204,7 +204,7 @@ async function addServer(ctx: any): Promise<void> {
     if (!result.ok) {
       ctx.ui.notify(
         `Could not connect: ${result.detail}\n\n`
-        + "If it needs a password, pick “I have nothing yet” instead — pi cannot answer password prompts.",
+        + "If it needs a password, pick “I have nothing yet” instead. pi cannot answer password prompts.",
         "error",
       );
       return;
@@ -250,7 +250,7 @@ async function addServer(ctx: any): Promise<void> {
   const instructions = [
     "A dedicated key was generated for this server.",
     "",
-    "Run ONE of these in your own terminal — pi cannot answer password prompts:",
+    "Run ONE of these in your own terminal. pi cannot answer password prompts:",
     "",
     `  ssh-copy-id -i ${display} ${ssh}`,
     "",
@@ -329,7 +329,7 @@ async function renameWorker(ctx: any): Promise<void> {
 async function removeWorker(ctx: any): Promise<void> {
   const stored = loadWorkers().workers;
   if (stored.length === 0) {
-    ctx.ui.notify("Nothing to remove — no workers are configured.", "info");
+    ctx.ui.notify("Nothing to remove, no workers are configured.", "info");
     return;
   }
 
@@ -363,7 +363,7 @@ async function hub(ctx: any): Promise<void> {
     const actions = rows.length > 0 ? [ADD, RENAME, REMOVE] : [ADD];
 
     const choice = await ctx.ui.select(
-      rows.length === 0 ? "No remote workers yet — add one" : "Remote workers — enter toggles, esc closes",
+      rows.length === 0 ? "No remote workers yet, add one" : "Remote workers",
       [...labels, ...actions],
     );
     if (!choice) return;
@@ -403,7 +403,7 @@ export function registerRemoteSetup(pi: ExtensionAPI): void {
         ctx.ui.notify(
           rows.length === 0
             ? "No hosts found. Run /remote add to configure one."
-            : rows.map((row) => `${row.enabled ? "[on] " : "[off]"} ${row.name} — ${row.detail}`).join("\n"),
+            : rows.map((row) => `${row.enabled ? "[on] " : "[off]"} ${row.name}: ${row.detail}`).join("\n"),
           "info",
         );
         return;

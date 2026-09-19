@@ -12,7 +12,7 @@ import { agentPath, readJson, writeJson } from "./store.ts";
  * }
  * ```
  *
- * Pi's own `settings.json` and `models.json` are deliberately NOT absorbed —
+ * Pi's own `settings.json` and `models.json` are deliberately NOT absorbed:
  * pi reads those from fixed paths and folding them in here would break it.
  *
  * Every legacy file is migrated on first read and left on disk, so downgrading

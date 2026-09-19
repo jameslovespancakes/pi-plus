@@ -41,7 +41,7 @@ test("a fresh install writes all three sections", async () => {
   }
 });
 
-test("sections are independent — writing one preserves the others", async () => {
+test("sections are independent, writing one preserves the others", async () => {
   const { module, read, cleanup } = await setup();
   try {
     module.updateConfig((config) => {

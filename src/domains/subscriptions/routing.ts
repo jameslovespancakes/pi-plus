@@ -23,7 +23,7 @@ export function registerRoutingCommands(pi: ExtensionAPI): void {
     getArgumentCompletions: (prefix) =>
       MODES.filter((mode) => mode.startsWith(prefix)).map((mode) => ({
         value: mode,
-        label: mode === "optimal" ? "optimal — balance by remaining quota" : "standard — main account first",
+        label: mode === "optimal" ? "optimal: balance by remaining quota" : "standard: main account first",
       })),
     handler: async (args, ctx) => {
       const [first, second] = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -63,7 +63,7 @@ export function registerRoutingCommands(pi: ExtensionAPI): void {
           const mode = await provider.routing!.set(first);
           results.push(`${provider.label}: ${mode}`, `  ${provider.routing!.describe(mode)}`);
         } catch (error) {
-          results.push(`${provider.label}: failed — ${error instanceof Error ? error.message : String(error)}`);
+          results.push(`${provider.label}: failed, ${error instanceof Error ? error.message : String(error)}`);
         }
       }
       ctx.ui.notify(results.join("\n"), "info");

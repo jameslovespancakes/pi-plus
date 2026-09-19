@@ -6,7 +6,7 @@ import { join } from "node:path";
  * Small JSON config helper shared by every domain.
  *
  * Writes go through a temp file + rename so a crash mid-write cannot leave a
- * truncated config behind — several of these files hold auth state.
+ * truncated config behind; several of these files hold auth state.
  */
 
 export function agentDir(): string {

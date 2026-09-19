@@ -168,7 +168,7 @@ export async function refreshQuality(force = false): Promise<string[]> {
   inFlight = (async () => {
     const warnings: string[] = [];
     const key = readKey();
-    if (!key) return ["artificial-analysis: no API key — run /model-info setup"];
+    if (!key) return ["artificial-analysis: no API key, run /model-info setup"];
 
     const stored = cache;
     // Only revalidate when a cached body backs the validator, so a 304 can never

@@ -1,12 +1,13 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerAccountProvider } from "../../core/accounts/registry.ts";
 import { anthropicAccounts } from "./providers/anthropic.ts";
+import { registerAnthropicProvider } from "./provider.ts";
 import { registerAccountCommands } from "./accounts.ts";
 import { registerRoutingCommands } from "./routing.ts";
 import { registerFooter } from "./footer.ts";
 
 /**
- * Subscriptions domain — Claude OAuth accounts, routing mode, and the quota HUD.
+ * Subscriptions domain: Claude OAuth accounts, routing mode, and the quota HUD.
  *
  * This replaces the old `claude-multi-account.ts` + `compact-footer.ts` pair.
  * Account and routing commands are provider-agnostic: `/account <provider>` and
@@ -19,7 +20,7 @@ import { registerFooter } from "./footer.ts";
  *   That package stays installed and keeps ownership of the Anthropic provider,
  *   its stream implementation, and its own commands (/claude-account,
  *   /claude-routing, /claude-quota, ...). Absorbing it fully was evaluated and
- *   rejected — its `dist/commands.js` exports only `registerCommands(pi)` as a
+ *   rejected, because its `dist/commands.js` exports only `registerCommands(pi)` as a
  *   unit, so taking over individual commands would mean copying ~130 lines of
  *   provider/model specs that drift on every vendor upgrade. This domain adds
  *   the multi-account surface the vendor does not provide, and everything it
@@ -28,6 +29,10 @@ import { registerFooter } from "./footer.ts";
 export default function subscriptions(pi: ExtensionAPI) {
   // Adapters register first so the generic commands can see them.
   registerAccountProvider(anthropicAccounts);
+
+  // Own the Anthropic provider unless explicitly told to defer to cortexkit.
+  // PI_PLUS_VENDOR_ANTHROPIC=1 restores the vendored package.
+  if (process.env.PI_PLUS_VENDOR_ANTHROPIC !== "1") registerAnthropicProvider(pi);
 
   registerAccountCommands(pi);
   registerRoutingCommands(pi);

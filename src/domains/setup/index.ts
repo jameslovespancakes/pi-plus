@@ -7,7 +7,7 @@ import { accountProviders } from "../../core/accounts/registry.ts";
 import { readSshHosts } from "../../core/exec/ssh-config.ts";
 
 /**
- * `/pi-plus` — status modal for the whole pack; `/pi-plus help` explains it.
+ * `/pi-plus` is the status modal for the pack; `/pi-plus help` explains it.
  *
  * The modal lists every feature with its live state. Selecting an unconfigured
  * one runs its setup command; selecting a ready one opens its hub. `help` hands
@@ -60,7 +60,7 @@ async function inspect(ctx: any): Promise<Feature[]> {
     }
   }
   features.push({
-    name: "Subscription accounts + quota HUD",
+    name: "Subscriptions",
     ready: anySignedIn,
     detail: accountSummary.join("; ") || "no account providers registered",
     commands: ["/account", "/account <provider> add", "/routing standard|optimal", "/usage"],
@@ -79,7 +79,7 @@ async function inspect(ctx: any): Promise<Feature[]> {
   const refreshedAt = cache.checkedAt ?? cache.fetchedAt;
   const ageHours = refreshedAt ? Math.round((Date.now() - refreshedAt) / 3.6e6) : undefined;
   features.push({
-    name: "Benchmark-driven model selection",
+    name: "Model Information",
     ready: hasKey && records > 0,
     detail: hasKey
       ? `${records} models cached${ageHours !== undefined ? `, refreshed ${ageHours}h ago` : ""}`
@@ -91,7 +91,7 @@ async function inspect(ctx: any): Promise<Feature[]> {
 
   /* spend policy */
   features.push({
-    name: "Metered spend guardrails",
+    name: "Providers",
     ready: config.policy.requireApproval.length > 0,
     detail: `${config.policy.requireApproval.length} gated pattern(s), ${config.policy.autoApprove.length} auto-approved`,
     commands: ["/provider", "/provider list", "/provider approve <name>"],
@@ -105,7 +105,7 @@ async function inspect(ctx: any): Promise<Feature[]> {
   // externally managed by definition.
   const mode = env("AGENT_BOARD_MODE") ?? (boardReady ? "external" : "none");
   features.push({
-    name: "Multi-agent board",
+    name: "Agent Board",
     ready: boardReady,
     detail: boardUrl ? `${mode} at ${boardUrl}` : "no board configured",
     commands: ["/board", "/board setup", "/board restart", "/board clear", "agent_board (tool)"],
@@ -121,7 +121,7 @@ async function inspect(ctx: any): Promise<Feature[]> {
     sshHosts = readSshHosts().length;
   } catch { /* no ssh config */ }
   features.push({
-    name: "Remote test workers",
+    name: "Remote Workers",
     ready: enabled.length > 0,
     detail: enabled.length > 0
       ? `${enabled.length} enabled of ${workers.length} configured`
@@ -146,7 +146,7 @@ function renderRow(feature: Feature, width: number): string {
 function buildBrief(features: Feature[]): string {
   const lines = features.map((feature) => {
     const parts = [
-      `- ${feature.name} — ${feature.ready ? "READY" : "NOT SET UP"}`,
+      `- ${feature.name}: ${feature.ready ? "READY" : "NOT SET UP"}`,
       `  state: ${feature.detail}`,
       `  commands: ${feature.commands.join(", ")}`,
     ];
@@ -178,9 +178,9 @@ function buildBrief(features: Feature[]): string {
 
 export default function setupGuide(pi: ExtensionAPI) {
   pi.registerCommand("pi-plus", {
-    description: "Status modal for every pi-plus feature — or `help` for a full explanation",
+    description: "Status for every pi-plus feature, or `help` for an explanation",
     getArgumentCompletions: (prefix) =>
-      "help".startsWith(prefix) ? [{ value: "help", label: "help — explain the extension and what is missing" }] : [],
+      "help".startsWith(prefix) ? [{ value: "help", label: "help: explain the extension and what is missing" }] : [],
     handler: async (args, ctx) => {
       const features = await inspect(ctx);
 
@@ -205,7 +205,7 @@ export default function setupGuide(pi: ExtensionAPI) {
 
       const width = Math.max(...rows.map((feature) => feature.name.length));
       const labels = rows.map((feature) => renderRow(feature, width));
-      const choice = await ctx.ui.select("pi-plus — enter opens · esc closes", labels);
+      const choice = await ctx.ui.select("pi-plus", labels);
       if (!choice) return;
 
       const picked = rows[labels.indexOf(choice)];

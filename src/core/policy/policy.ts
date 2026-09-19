@@ -77,7 +77,7 @@ export function providerState(provider: string): ProviderState {
  *
  * Auto-approved providers are moved into `requireApproval` so the switch is
  * reversible; gated ones just gain or lose their session grant. Denied
- * providers are left alone — `deny` is an explicit, deliberate block.
+ * providers are left alone; `deny` is an explicit, deliberate block.
  */
 export function toggleProvider(provider: string): ProviderState {
   const state = providerState(provider);

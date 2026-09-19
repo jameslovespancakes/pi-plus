@@ -111,7 +111,7 @@ for (const statement of [
 
 /**
  * Prepared-statement cache. The previous implementation compiled SQL on every
- * call — 36 separate `prepare()` sites, several inside per-row loops.
+ * call: 36 separate `prepare()` sites, several inside per-row loops.
  */
 const statements = new Map();
 const q = (sql) => {
@@ -384,7 +384,7 @@ function handleRequest(selfId, request) {
       const raw = String(request.agent ?? "").trim().toLowerCase();
       const clear = !raw || ["none", "clear", "off", "null"].includes(raw);
       const coordinatorKey = clear ? undefined : resolveKey(request.agent);
-      if (!clear && !coordinatorKey) throw new Error("set_coordinator requires 'agent' — the coordinator alias or session id");
+      if (!clear && !coordinatorKey) throw new Error("set_coordinator requires 'agent', the coordinator alias or session id");
 
       const applied = [];
       const touched = new Set();

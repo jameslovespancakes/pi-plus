@@ -260,7 +260,7 @@ async function setup(pi: ExtensionAPI, ctx: any): Promise<void> {
     setEnv("AGENT_BOARD_TOKEN", token.trim());
     setEnv("AGENT_BOARD_MODE", "external");
     const probe = await health();
-    ctx.ui.notify(probe.ok ? `Connected — ${probe.detail}. Restart pi to join.` : `Saved, but not reachable: ${probe.detail}`, probe.ok ? "info" : "warning");
+    ctx.ui.notify(probe.ok ? `Connected. ${probe.detail}. Restart pi to join.` : `Saved, but not reachable: ${probe.detail}`, probe.ok ? "info" : "warning");
     return;
   }
 
@@ -319,7 +319,7 @@ async function setup(pi: ExtensionAPI, ctx: any): Promise<void> {
   await new Promise((done) => setTimeout(done, 1_500));
   const probe = await health();
   ctx.ui.notify(
-    probe.ok ? `Board reachable — ${probe.detail}. Restart pi to join.` : `Installed, but not reachable yet: ${probe.detail}`,
+    probe.ok ? `Board reachable. ${probe.detail}. Restart pi to join.` : `Installed, but not reachable yet: ${probe.detail}`,
     probe.ok ? "info" : "warning",
   );
 }
@@ -353,7 +353,7 @@ export async function handleBoardAdmin(pi: ExtensionAPI, ctx: any, args: string)
           await new Promise((done) => setTimeout(done, 800));
           const probe = await health();
           ctx.ui.notify(
-            started.started && probe.ok ? `Local board restarted — ${probe.detail}.` : `Restart issue: ${started.reason ?? probe.detail}`,
+            started.started && probe.ok ? `Local board restarted. ${probe.detail}.` : `Restart issue: ${started.reason ?? probe.detail}`,
             started.started && probe.ok ? "info" : "warning",
           );
           return true;
@@ -367,7 +367,7 @@ export async function handleBoardAdmin(pi: ExtensionAPI, ctx: any, args: string)
           ctx.ui.notify(`Restarting board on ${host}…`, "info");
           const detail = await restartRemote(host);
           const probe = await health();
-          ctx.ui.notify(`${detail}${probe.ok ? ` — ${probe.detail}` : ""}`, probe.ok ? "info" : "warning");
+          ctx.ui.notify(`${detail}${probe.ok ? `. ${probe.detail}` : ""}`, probe.ok ? "info" : "warning");
           return true;
         }
         ctx.ui.notify("This board is externally managed; restart it where it runs.", "warning");

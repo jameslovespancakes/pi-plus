@@ -7,7 +7,7 @@ import { dirname, isAbsolute, join } from "node:path";
  * Minimal `~/.ssh/config` reader.
  *
  * Deliberately narrow: it extracts only what is needed to offer a host as a
- * remote worker — the alias, HostName, User, Port, and whether an IdentityFile
+ * remote worker: the alias, HostName, User, Port, and whether an IdentityFile
  * is configured. It never reads key material, and callers must keep the results
  * in the UI layer: host aliases frequently name internal infrastructure and have
  * no business being sent to a model provider.

@@ -47,7 +47,7 @@ export function isFromProcessEnv(key: EnvKey): boolean {
   return typeof value === "string" && value.trim() !== "";
 }
 
-/** `aa_vaoi…rXcC` — enough to recognise, not enough to use. */
+/** `aa_vaoi…rXcC`: enough to recognise, not enough to use. */
 export function maskSecret(value: string): string {
   if (value.length <= 10) return "•".repeat(value.length);
   return `${value.slice(0, 5)}…${value.slice(-4)}`;
