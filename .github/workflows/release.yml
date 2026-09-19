@@ -13,6 +13,9 @@ concurrency:
 
 permissions:
   contents: write
+  # Publishing the same release to GitHub Packages, which is what populates
+  # the repository's Packages sidebar.
+  packages: write
   # Lets the runner mint an OIDC token for npm trusted publishing. The npm CLI
   # detects this automatically and prefers it over NPM_TOKEN, so the secret
   # becomes unnecessary once a trusted publisher is configured.
@@ -80,9 +83,12 @@ jobs:
       #
       # A granular token must have "Bypass 2FA" enabled, or npm answers 403
       # even when the token is otherwise valid.
+      # --provenance signs the release with the commit and workflow that built
+      # it, so npm can show a verified link back to this repository. It needs
+      # id-token: write above and a public repository.
       - name: Publish to npm
         id: publish
-        run: npm publish --access public
+        run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -100,6 +106,17 @@ jobs:
             echo "- Publish once locally with \`npm publish --access public --otp=<code>\`,"
             echo "  then configure a **trusted publisher** so no token is needed again."
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # A second copy on GitHub Packages, purely so the repository shows a
+      # linked package. Installing from here needs a GitHub token even for a
+      # public package, so npmjs.com stays the real install path. A failure is
+      # not worth failing a release that already published.
+      - name: Mirror to GitHub Packages
+        continue-on-error: true
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          npm publish --registry=https://npm.pkg.github.com --access public
 
       - name: Commit and tag
         run: |

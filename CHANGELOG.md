@@ -8,6 +8,15 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+### Added
+
+- npm provenance. Each release is signed with the commit and workflow that
+  built it, so npm shows a verified link back to this repository. This needs a
+  public repository, which is why it was not possible before.
+- A mirror of each release on GitHub Packages, so the repository lists a linked
+  package. npmjs.com remains the install path: GitHub Packages requires a token
+  even for public packages.
+
 ## [1.0.8] - 2026-09-19
 
 ### Fixed
