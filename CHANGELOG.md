@@ -8,6 +8,15 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+### Changed
+
+- Releases are opt-in. Every push to main used to publish a version, which
+  produced eleven of them in an afternoon. A release now needs `[release]` in
+  the commit message or a manual run from the Actions tab.
+- CI runs on every push including main, since it is now the only check on an
+  ordinary push, and the badge tracks it again.
+- The package description is just "pi and more".
+
 ## [1.0.11] - 2026-09-19
 
 ### Changed

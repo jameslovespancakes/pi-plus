@@ -1,7 +1,8 @@
 name: Release
 
-# Every push to main that passes lint, typecheck and tests is bumped and
-# published. Skip a release by putting [skip release] in the commit message.
+# Releases are deliberate, not automatic. Trigger one by running this workflow
+# from the Actions tab, or by putting [release] in a commit message on main.
+# Ordinary pushes only run CI.
 on:
   push:
     branches: [main]
@@ -27,7 +28,9 @@ jobs:
   verify:
     # Deliberately unnamed: GitHub prefixes the reusable workflow's own job
     # name with this one, and naming both renders it twice.
-    if: "!contains(github.event.head_commit.message, '[skip release]')"
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || contains(github.event.head_commit.message, '[release]')
     uses: ./.github/workflows/ci.yml
 
   publish:

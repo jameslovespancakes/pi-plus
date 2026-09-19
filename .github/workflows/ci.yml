@@ -1,13 +1,10 @@
 name: CI
 
-# Runs on pull requests and non-main branches, and is called by release.yml on
-# main. A workflow_call run is attributed to the CALLER, so this workflow has
-# no runs of its own on main and its badge reads "no status"; the README badge
-# therefore tracks release.yml, which contains this job verbatim.
+# Runs on every push and pull request, including main. Releases are opt-in now,
+# so this is the only thing checking ordinary pushes.
 on:
   pull_request:
   push:
-    branches-ignore: [main]
   workflow_call:
 
 jobs:
