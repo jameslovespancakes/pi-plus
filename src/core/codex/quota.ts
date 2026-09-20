@@ -73,22 +73,54 @@ export function parseCodexQuotaHeaders(
   } as QuotaSnapshot;
 }
 
-/** Merges a header-derived snapshot into the stored account. */
+/**
+ * True when two snapshots carry the same reading. `checkedAt` moves on every
+ * response, so comparing it would defeat the whole check.
+ */
+function sameQuota(left: QuotaSnapshot | undefined, right: QuotaSnapshot | undefined): boolean {
+  if (!left || !right) return false;
+  const compare = (snapshot: QuotaSnapshot) => {
+    const window = (value: QuotaSnapshot["five_hour"]) =>
+      value ? { used: value.usedPercent, resets: value.resetsAt, minutes: (value as any).windowMinutes } : undefined;
+    return JSON.stringify({
+      five_hour: window(snapshot.five_hour),
+      seven_day: window(snapshot.seven_day),
+      plan: (snapshot as any).plan,
+    });
+  };
+  return compare(left) === compare(right);
+}
+
+/**
+ * Merges a header-derived snapshot into the stored account.
+ *
+ * Runs from `onResponse` on every single reply, so it is deliberately quiet
+ * and cheap: unchanged readings never touch the disk, and a failed write is
+ * swallowed. Throwing here would reject the awaited `onResponse` inside the
+ * provider and kill an in-flight stream — quota telemetry must never do that.
+ */
 export function applyCodexQuotaHeaders(
   accountId: string,
   headers: Record<string, unknown> | undefined,
   now = Date.now(),
 ): boolean {
-  const quota = parseCodexQuotaHeaders(headers, now);
-  if (!quota) return false;
-  const storage = loadCodexAccounts();
-  if (accountId === MAIN_ACCOUNT_ID) {
-    storage.main = { ...storage.main, quota };
-    saveCodexAccounts(storage);
+  try {
+    const quota = parseCodexQuotaHeaders(headers, now);
+    if (!quota) return false;
+    const storage = loadCodexAccounts();
+    if (accountId === MAIN_ACCOUNT_ID) {
+      if (sameQuota(storage.main?.quota, quota)) return false;
+      storage.main = { ...storage.main, quota };
+      saveCodexAccounts(storage);
+      return true;
+    }
+    const account = storage.accounts.find((candidate) => candidate.id === accountId);
+    if (!account) return false;
+    if (sameQuota(account.quota, quota)) return false;
+    saveCodexAccount({ ...account, quota });
     return true;
+  } catch {
+    // Best effort: a quota write must never break the request that produced it.
+    return false;
   }
-  const account = storage.accounts.find((candidate) => candidate.id === accountId);
-  if (!account) return false;
-  saveCodexAccount({ ...account, quota });
-  return true;
 }

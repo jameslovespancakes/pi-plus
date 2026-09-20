@@ -19,6 +19,22 @@ export interface ProviderOAuthPool {
   mode: OAuthPoolMode;
 }
 
+/**
+ * Storage behind a pooled provider.
+ *
+ * Most providers share one `pi-plus-oauth-accounts.json`, but a provider that
+ * already owns a file with extra fields (Codex carries `accountId`/`plan`, and
+ * its quota snapshot feeds the usage bars) supplies its own implementation so
+ * it can join the shared serving path without a risky file migration.
+ */
+export interface PooledOAuthStore {
+  load(): ProviderOAuthPool;
+  saveAccount(account: PooledOAuthAccount): void;
+  saveMode(mode: OAuthPoolMode): void;
+  /** Routing state for the credential pi itself is logged in as. */
+  primaryQuota(): AccountQuotaState | undefined;
+}
+
 interface OAuthPoolFile {
   version: 1;
   providers: Record<string, ProviderOAuthPool>;
@@ -97,6 +113,25 @@ export function oauthIdentity(access: string): string | undefined {
   return undefined;
 }
 
+/** In-memory quota for each provider's primary (host) credential. */
+const primaryQuotas = new Map<string, AccountQuotaState>();
+
+/** Default store: the shared pool file, with primary quota held in memory. */
+export function sharedOAuthPoolStore(providerId: string): PooledOAuthStore {
+  return {
+    load: () => loadOAuthPool(providerId),
+    saveAccount: (account) => saveOAuthAccount(providerId, account),
+    saveMode: (mode) => setOAuthPoolMode(providerId, mode),
+    primaryQuota: () => primaryQuotas.get(providerId),
+  };
+}
+
+/** Records routing state for a provider's primary credential. */
+export function setPrimaryQuota(providerId: string, quota: AccountQuotaState): void {
+  primaryQuotas.set(providerId, quota);
+}
+
 export function resetOAuthPoolCache(): void {
   fileCache.clear();
+  primaryQuotas.clear();
 }

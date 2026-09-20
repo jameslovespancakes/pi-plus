@@ -15,6 +15,23 @@ export interface AccountRoutingCandidate<T> {
 
 export type AccountRoutingMode = "sequential" | "quota-aware";
 
+/**
+ * Upper bound on a token refresh, matching pi-ai's own
+ * `DEFAULT_OAUTH_REFRESH_TIMEOUT_MS` in `auth/resolve.js`.
+ *
+ * Routed auth runs outside pi-ai's refresh path, so nothing else bounds it.
+ * An unbounded refresh against a stalled token endpoint hangs the request
+ * forever, and because in-flight refreshes are de-duplicated per account,
+ * every later request joins the same hung promise.
+ */
+export const OAUTH_REFRESH_TIMEOUT_MS = 15_000;
+
+/** Bounds a refresh, honouring a caller signal when one is available. */
+export function refreshAbortSignal(signal?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(OAUTH_REFRESH_TIMEOUT_MS);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
 /** Maps stored legacy names onto the two routing modes. */
 export function normalizeRoutingMode(value: string | undefined): AccountRoutingMode {
   return value === "quota-aware" || value === "optimal" || value === "sticky-balanced"
@@ -83,6 +100,11 @@ export function quotaStateFromHeaders(
   return { remainingPercent, resetAt, checkedAt: now };
 }
 
+/**
+ * Exhausted-with-no-reset is already handled by `isCandidateViable` below, so
+ * callers never need a sentinel `blockedUntil`. Persisting `Infinity` would
+ * serialize to `null` and silently unblock on the next load.
+ */
 function isCandidateViable(quota: AccountQuotaState | undefined, now: number): boolean {
   if (!quota) return true;
   if (quota.blockedUntil !== undefined && quota.blockedUntil > now) return false;

@@ -2,25 +2,48 @@ import { randomUUID } from "node:crypto";
 import type { ModelAuth, OAuthAuth, OAuthCredential, Provider } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AccountContext, AccountProvider, ManagedAccount, RoutingMode } from "../../../core/accounts/registry.ts";
-import { quotaStateFromHeaders, selectRoutingCandidate, type AccountQuotaState } from "../../../core/accounts/routing.ts";
 import {
-  loadOAuthPool,
+  quotaStateFromHeaders,
+  refreshAbortSignal,
+  selectRoutingCandidate,
+} from "../../../core/accounts/routing.ts";
+import {
   oauthIdentity,
-  saveOAuthAccount,
-  saveOAuthPool,
-  setOAuthPoolMode,
+  setPrimaryQuota,
+  sharedOAuthPoolStore,
   type PooledOAuthAccount,
+  type PooledOAuthStore,
 } from "../../../core/accounts/oauth-pool.ts";
 
 export interface PooledOAuthProviderSpec {
   id: string;
   label: string;
   createProvider(): Provider;
+  /** Backing storage. Defaults to the shared pi-plus OAuth pool file. */
+  store?: PooledOAuthStore;
+  /** Confirmation shown before an interactive `add`. */
+  addPrompt?: string;
+  /** Display label for an account. */
+  describeAccount?(account: PooledOAuthAccount): string;
+  /** Stable identity used to reject a duplicate login. Defaults to JWT claims. */
+  identityOf?(access: string): string | undefined;
+  /**
+   * Records a response's quota signal against an account. Defaults to the
+   * generic `x-ratelimit-*` reader; providers with their own headers (Codex
+   * sends `x-codex-*`) override it. Must never throw: it runs inside the
+   * awaited `onResponse`, so a rejection would kill an in-flight stream.
+   */
+  recordQuota?(accountId: string, status: number, headers: Record<string, string>): void;
 }
 
+const MAIN = "main";
+
 const lastUsed = new Map<string, number>();
-const primaryQuota = new Map<string, AccountQuotaState>();
 const refreshes = new Map<string, Promise<PooledOAuthAccount>>();
+
+function storeFor(spec: PooledOAuthProviderSpec): PooledOAuthStore {
+  return spec.store ?? sharedOAuthPoolStore(spec.id);
+}
 
 function oauthFor(spec: PooledOAuthProviderSpec): OAuthAuth {
   const oauth = spec.createProvider().auth.oauth;
@@ -64,111 +87,117 @@ async function authenticate(spec: PooledOAuthProviderSpec, ctx: AccountContext):
   });
 }
 
-function accountLabel(account: PooledOAuthAccount): string {
-  return account.label || account.identity || account.id.slice(0, 8);
+function accountLabel(spec: PooledOAuthProviderSpec, account: PooledOAuthAccount): string {
+  return spec.describeAccount?.(account) ?? (account.label || account.identity || account.id.slice(0, 8));
 }
 
-function duplicateAccount(spec: PooledOAuthProviderSpec, credential: OAuthCredential, excludeId?: string): PooledOAuthAccount | undefined {
-  const identity = oauthIdentity(credential.access);
-  return loadOAuthPool(spec.id).accounts.find((account) =>
+function identityFor(spec: PooledOAuthProviderSpec, access: string): string | undefined {
+  return (spec.identityOf ?? oauthIdentity)(access);
+}
+
+function duplicateAccount(
+  spec: PooledOAuthProviderSpec,
+  credential: OAuthCredential,
+  excludeId?: string,
+): PooledOAuthAccount | undefined {
+  const identity = identityFor(spec, credential.access);
+  return storeFor(spec).load().accounts.find((account) =>
     account.id !== excludeId && (identity ? account.identity === identity : account.access === credential.access));
 }
 
 export function createPooledOAuthAdapter(spec: PooledOAuthProviderSpec): AccountProvider {
+  const store = () => storeFor(spec);
+
   return {
     id: spec.id,
     label: spec.label,
 
     async list(): Promise<ManagedAccount[]> {
-      return loadOAuthPool(spec.id).accounts.map((account) => ({
+      return store().load().accounts.map((account) => ({
         id: account.id,
-        label: accountLabel(account),
+        label: accountLabel(spec, account),
         enabled: account.enabled !== false,
         expiresAt: account.expires,
       }));
     },
 
     async add(ctx, label): Promise<string | undefined> {
-      if (!await ctx.ui.confirm(`Add ${spec.label} account`, `Sign in with another ${spec.label} subscription?`)) {
-        return undefined;
-      }
+      const prompt = spec.addPrompt ?? `Sign in with another ${spec.label} subscription?`;
+      if (!await ctx.ui.confirm(`Add ${spec.label} account`, prompt)) return undefined;
+
       const credential = await authenticate(spec, ctx);
       const duplicate = duplicateAccount(spec, credential);
-      if (duplicate) throw new Error(`That account is already saved as “${accountLabel(duplicate)}”.`);
+      if (duplicate) throw new Error(`That account is already saved as “${accountLabel(spec, duplicate)}”.`);
 
-      saveOAuthAccount(spec.id, {
+      store().saveAccount({
         ...credential,
         id: randomUUID(),
         label,
         enabled: true,
-        identity: oauthIdentity(credential.access),
+        identity: identityFor(spec, credential.access),
         addedAt: Date.now(),
       });
       return label;
     },
 
     async reauth(ctx, accountId): Promise<string | undefined> {
-      const account = loadOAuthPool(spec.id).accounts.find(
+      const account = store().load().accounts.find(
         (candidate) => candidate.id === accountId || candidate.label === accountId,
       );
       if (!account) throw new Error(`${spec.label} account “${accountId}” not found.`);
 
       const credential = await authenticate(spec, ctx);
       const duplicate = duplicateAccount(spec, credential, account.id);
-      if (duplicate) throw new Error(`That account is already saved as “${accountLabel(duplicate)}”.`);
-      saveOAuthAccount(spec.id, {
+      if (duplicate) throw new Error(`That account is already saved as “${accountLabel(spec, duplicate)}”.`);
+      store().saveAccount({
         ...account,
         ...credential,
-        identity: oauthIdentity(credential.access),
+        identity: identityFor(spec, credential.access),
       });
       return account.label;
     },
 
     async setEnabled(accountId, enabled): Promise<void> {
-      const pool = loadOAuthPool(spec.id);
-      const account = pool.accounts.find((candidate) => candidate.id === accountId);
+      const account = store().load().accounts.find((candidate) => candidate.id === accountId);
       if (!account) throw new Error(`${spec.label} account “${accountId}” not found.`);
-      account.enabled = enabled;
-      saveOAuthPool(spec.id, pool);
+      store().saveAccount({ ...account, enabled });
     },
 
     async rename(accountId, label): Promise<void> {
-      const pool = loadOAuthPool(spec.id);
-      const account = pool.accounts.find((candidate) => candidate.id === accountId);
+      const account = store().load().accounts.find((candidate) => candidate.id === accountId);
       if (!account) throw new Error(`${spec.label} account “${accountId}” not found.`);
-      account.label = label;
-      saveOAuthPool(spec.id, pool);
+      store().saveAccount({ ...account, label });
     },
 
     routing: {
       async get(): Promise<RoutingMode> {
-        return loadOAuthPool(spec.id).mode;
+        return store().load().mode;
       },
       async set(mode): Promise<RoutingMode> {
-        setOAuthPoolMode(spec.id, mode);
+        store().saveMode(mode);
         return mode;
       },
       describe(mode): string {
         return mode === "quota-aware"
-          ? `Uses ${spec.label} quota headers when available, otherwise rotates fairly.`
-          : `Uses ${spec.label} accounts in order, moving on when one is rate-limited.`;
+          ? `Uses the ${spec.label} subscription with the most remaining quota.`
+          : `Uses ${spec.label} subscriptions in order, moving on when one is exhausted.`;
       },
     },
   };
 }
 
-function chooseCredential(
+export function chooseCredential(
   spec: PooledOAuthProviderSpec,
   primary: OAuthCredential,
 ): { id: string; credential: OAuthCredential; account?: PooledOAuthAccount } {
-  const pool = loadOAuthPool(spec.id);
+  const pool = storeFor(spec).load();
   const candidates = [
     {
-      id: "main",
+      id: MAIN,
       order: 0,
-      lastUsed: lastUsed.get(`${spec.id}:main`) ?? 0,
-      quota: primaryQuota.get(spec.id),
-      value: { id: "main", credential: primary },
+      lastUsed: lastUsed.get(`${spec.id}:${MAIN}`) ?? 0,
+      quota: storeFor(spec).primaryQuota(),
+      value: { id: MAIN, credential: primary },
     },
     ...pool.accounts
       .filter((account) => account.enabled !== false && account.access)
@@ -180,19 +209,24 @@ function chooseCredential(
         value: { id: account.id, credential: account, account },
       })),
   ];
-  return selectRoutingCandidate(candidates, pool.mode)?.value ?? { id: "main", credential: primary };
+  return selectRoutingCandidate(candidates, pool.mode)?.value ?? { id: MAIN, credential: primary };
 }
 
-async function freshCredential(spec: PooledOAuthProviderSpec, account: PooledOAuthAccount, signal: AbortSignal): Promise<PooledOAuthAccount> {
+async function freshCredential(
+  spec: PooledOAuthProviderSpec,
+  account: PooledOAuthAccount,
+): Promise<PooledOAuthAccount> {
   if (account.expires > Date.now() + 60_000) return account;
 
   const key = `${spec.id}:${account.id}`;
   const active = refreshes.get(key);
   if (active) return active;
 
-  const refresh = oauthFor(spec).refresh(account, signal).then((credential) => {
+  // Bounded: nothing upstream constrains this call, and a hung refresh would be
+  // shared by every later request for the account through the map above.
+  const refresh = oauthFor(spec).refresh(account, refreshAbortSignal()).then((credential) => {
     const updated = { ...account, ...credential };
-    saveOAuthAccount(spec.id, updated);
+    storeFor(spec).saveAccount(updated);
     return updated;
   }).finally(() => refreshes.delete(key));
   refreshes.set(key, refresh);
@@ -205,15 +239,12 @@ async function routedAuth(
   primary: OAuthCredential,
 ): Promise<ModelAuth> {
   const selected = chooseCredential(spec, primary);
-  const signal = new AbortController().signal;
-  const credential = selected.account
-    ? await freshCredential(spec, selected.account, signal)
-    : primary;
+  const credential = selected.account ? await freshCredential(spec, selected.account) : primary;
   const now = Date.now();
   lastUsed.set(`${spec.id}:${selected.id}`, now);
 
   if (selected.account && now - (selected.account.lastUsed ?? 0) >= 60_000) {
-    saveOAuthAccount(spec.id, { ...selected.account, ...credential, lastUsed: now });
+    storeFor(spec).saveAccount({ ...selected.account, ...credential, lastUsed: now });
   }
   return oauth.toAuth(credential);
 }
@@ -226,7 +257,11 @@ export function registerPooledOAuthProvider(pi: ExtensionAPI, spec: PooledOAuthP
   const withQuotaObserver = (options: any) => ({
     ...options,
     onResponse: async (response: { status: number; headers: Record<string, string> }, model: unknown) => {
-      recordQuotaResponse(spec, requestAccessToken(options), response.status, response.headers);
+      try {
+        recordQuotaResponse(spec, requestAccessToken(options), response.status, response.headers);
+      } catch {
+        // Quota accounting is telemetry; it must never fail the response.
+      }
       await options?.onResponse?.(response, model);
     },
   });
@@ -255,19 +290,30 @@ function requestAccessToken(options: any): string | undefined {
   return match?.[1];
 }
 
+/** Resolves which pooled account served a request, falling back to the primary. */
+function accountIdForToken(spec: PooledOAuthProviderSpec, access: string | undefined): string {
+  if (!access) return MAIN;
+  return storeFor(spec).load().accounts.find((candidate) => candidate.access === access)?.id ?? MAIN;
+}
+
 function recordQuotaResponse(
   spec: PooledOAuthProviderSpec,
   access: string | undefined,
   status: number,
   headers: Record<string, string>,
 ): void {
+  if (spec.recordQuota) {
+    spec.recordQuota(accountIdForToken(spec, access), status, headers);
+    return;
+  }
+
   if (!access) return;
-  const pool = loadOAuthPool(spec.id);
-  const account = pool.accounts.find((candidate) => candidate.access === access);
-  const previous = account?.quota ?? primaryQuota.get(spec.id);
+  const store = storeFor(spec);
+  const account = store.load().accounts.find((candidate) => candidate.access === access);
+  const previous = account?.quota ?? store.primaryQuota();
   const quota = quotaStateFromHeaders(status, headers, previous);
   if (!quota || quota === previous) return;
 
-  if (account) saveOAuthAccount(spec.id, { ...account, quota });
-  else primaryQuota.set(spec.id, quota);
+  if (account) store.saveAccount({ ...account, quota });
+  else setPrimaryQuota(spec.id, quota);
 }

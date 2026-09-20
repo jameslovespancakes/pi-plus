@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { readJson, writeJson } from "../store.ts";
 import type { QuotaSnapshot } from "../anthropic/store.ts";
 
 /**
@@ -44,19 +44,29 @@ export function codexAccountsPath(): string {
 }
 
 export function loadCodexAccounts(path = codexAccountsPath()): CodexStorage {
-  try {
-    const raw = JSON.parse(readFileSync(path, "utf8"));
-    const accounts = Array.isArray(raw?.accounts) ? raw.accounts : [];
-    return { accounts, main: raw?.main, routing: raw?.routing };
-  } catch {
-    return { accounts: [] };
-  }
+  const raw = readJson<Partial<CodexStorage>>(path, {});
+  return {
+    accounts: Array.isArray(raw?.accounts) ? raw.accounts : [],
+    main: raw?.main,
+    routing: raw?.routing,
+  };
 }
 
+/**
+ * Atomic write (temp file + rename), matching every other store in the repo.
+ *
+ * A truncate-in-place `writeFileSync` here let a concurrent reader observe a
+ * half-written file; `loadCodexAccounts` swallows the parse error and returns
+ * an empty account list, so the next save persisted that emptiness and the
+ * user's accounts disappeared. On Windows the same overlap surfaces as
+ * EPERM/EBUSY. Callers that mutate credentials want to hear about a failed
+ * write, so this still throws — only the per-response quota path swallows it.
+ */
 export function saveCodexAccounts(storage: CodexStorage, path = codexAccountsPath()): void {
-  mkdirSync(dirname(path), { recursive: true });
   // 0600: these are live OAuth credentials.
-  writeFileSync(path, JSON.stringify(storage, null, 2) + "\n", { mode: 0o600 });
+  if (!writeJson(path, storage, true, 0o600)) {
+    throw new Error(`Could not write Codex accounts to ${path}`);
+  }
 }
 
 /** Inserts or replaces one account, leaving the others untouched. */

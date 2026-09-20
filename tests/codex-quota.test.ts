@@ -1,11 +1,22 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseCodexQuotaHeaders } from "../src/core/codex/quota.ts";
+import { applyCodexQuotaHeaders, parseCodexQuotaHeaders } from "../src/core/codex/quota.ts";
 import { claimsOf, loadCodexAccounts, saveCodexAccounts } from "../src/core/codex/store.ts";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { rmSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+
+function withCodexStore(run: (path: string) => void): void {
+  const path = join(tmpdir(), `pi-plus-codex-quota-${randomUUID()}.json`);
+  process.env.PI_PLUS_CODEX_ACCOUNTS_FILE = path;
+  try {
+    run(path);
+  } finally {
+    rmSync(path, { force: true });
+    delete process.env.PI_PLUS_CODEX_ACCOUNTS_FILE;
+  }
+}
 
 /** Real headers captured from a live Codex response. */
 const LIVE = {
@@ -109,6 +120,50 @@ test("rename changes only the label, never the credentials", () => {
   assert.equal(after.expires, 123);
   assert.equal(after.accountId, "acct-1");
   rmSync(path, { force: true });
+});
+
+test("an unchanged reading never rewrites the credential file", () => {
+  // applyCodexQuotaHeaders runs from onResponse on EVERY reply. Rewriting live
+  // OAuth credentials that often is what made concurrent readers observe a
+  // half-written file, so an identical reading must be a no-op.
+  withCodexStore((path) => {
+    assert.equal(applyCodexQuotaHeaders("main", LIVE), true, "first reading is stored");
+    const before = readFileSync(path, "utf8");
+
+    assert.equal(applyCodexQuotaHeaders("main", LIVE), false, "identical reading is skipped");
+    assert.equal(readFileSync(path, "utf8"), before, "file must be untouched");
+
+    const moved = { ...LIVE, "x-codex-primary-used-percent": "9" };
+    assert.equal(applyCodexQuotaHeaders("main", moved), true, "a real change still writes");
+    assert.notEqual(readFileSync(path, "utf8"), before);
+  });
+});
+
+test("a failed quota write is swallowed rather than killing the stream", () => {
+  // This runs inside the awaited onResponse; throwing would reject an
+  // in-flight stream. An unwritable path must simply report "not stored".
+  const blocker = join(tmpdir(), `pi-plus-codex-blocker-${randomUUID()}`);
+  writeFileSync(blocker, "not a directory");
+  process.env.PI_PLUS_CODEX_ACCOUNTS_FILE = join(blocker, "accounts.json");
+  try {
+    assert.equal(applyCodexQuotaHeaders("main", LIVE), false);
+  } finally {
+    rmSync(blocker, { force: true });
+    delete process.env.PI_PLUS_CODEX_ACCOUNTS_FILE;
+  }
+});
+
+test("credential writes are atomic and leave no temp file behind", () => {
+  withCodexStore((path) => {
+    saveCodexAccounts({ accounts: [{ id: "a1", label: "Work", access: "tok" }] }, path);
+
+    assert.ok(statSync(path).isFile());
+    assert.deepEqual(JSON.parse(readFileSync(path, "utf8")).accounts.length, 1);
+
+    const strays = readdirSync(dirname(path)).filter((name) =>
+      name.startsWith(`${path.split(/[\\/]/).pop()}.`) && name.endsWith(".tmp"));
+    assert.deepEqual(strays, [], "the temp file must be renamed, not left behind");
+  });
 });
 
 test("a duplicate ChatGPT account is detectable before it is stored", () => {

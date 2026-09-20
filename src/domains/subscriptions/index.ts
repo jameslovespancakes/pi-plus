@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerAccountProvider } from "../../core/accounts/registry.ts";
 import { anthropicAccounts } from "./providers/anthropic.ts";
-import { codexAccounts, registerCodexProvider } from "./providers/codex.ts";
+import { codexAccounts, CODEX_SPEC } from "./providers/codex.ts";
 import { kimiAccounts, KIMI_SPEC, xaiAccounts, XAI_SPEC } from "./providers/hosted.ts";
 import { registerPooledOAuthProvider } from "./providers/oauth-pool.ts";
 import { registerAnthropicProvider } from "./provider.ts";
@@ -16,9 +16,9 @@ export default function subscriptions(pi: ExtensionAPI) {
   }
 
   registerAnthropicProvider(pi);
-  registerCodexProvider(pi);
-  registerPooledOAuthProvider(pi, KIMI_SPEC);
-  registerPooledOAuthProvider(pi, XAI_SPEC);
+  for (const spec of [CODEX_SPEC, KIMI_SPEC, XAI_SPEC]) {
+    registerPooledOAuthProvider(pi, spec);
+  }
 
   registerAccountCommands(pi);
   registerRoutingCommands(pi);
