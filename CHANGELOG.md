@@ -8,6 +8,8 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+## [1.0.13] - 2026-09-20
+
 ### Added
 
 - Better Compact, a reversible compaction mode with trust-aware chunking,
@@ -252,7 +254,8 @@ First published release.
   truncated to `claude` and named neither the window nor the model. They now
   show the model family, for example `Fable`.
 
-[Unreleased]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.12...HEAD
+[Unreleased]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.13...HEAD
+[1.0.13]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.12...v1.0.13
 [1.0.12]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.11...v1.0.12
 [1.0.11]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.10...v1.0.11
 [1.0.10]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.9...v1.0.10
