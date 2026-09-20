@@ -1,16 +1,16 @@
 import { truncateToWidth } from "@earendil-works/pi-tui";
 
-const VIEWPORT_HEIGHT_RATIO = 0.8;
-const VIEWPORT_MARGIN_ROWS = 2;
+const VIEWPORT_HEIGHT_RATIO = 0.7;
+const VIEWPORT_MARGIN_ROWS = 4;
 
 export const WORKFLOW_VIEWER_OVERLAY_OPTIONS = {
   overlay: true,
   overlayOptions: {
     anchor: "center",
-    width: "80%",
-    minWidth: 40,
-    maxHeight: "80%",
-    margin: 1,
+    width: "70%",
+    minWidth: 48,
+    maxHeight: "70%",
+    margin: 2,
   },
 } as const;
 

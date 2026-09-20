@@ -1,5 +1,10 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { accountRows, openAccountsPicker, type AccountState } from "./accounts-picker.ts";
+import { readStoredCredential, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  accountRows,
+  openAccountsPicker,
+  providerAccounts,
+  type AccountState,
+} from "./accounts-picker.ts";
 import {
   accountProvider,
   accountProviders,
@@ -46,11 +51,29 @@ function bridge(pi: ExtensionAPI, ctx: any): AccountContext {
   };
 }
 
+async function primaryAccount(provider: AccountProvider): Promise<ManagedAccount | undefined> {
+  try {
+    const credential = readStoredCredential(provider.id);
+    if (!credential) return undefined;
+    return {
+      id: "main",
+      label: "Primary",
+      enabled: true,
+      expiresAt: credential.type === "oauth" ? credential.expires : undefined,
+      primary: true,
+      identity: credential.type === "oauth" ? await provider.identify?.(credential.access) : undefined,
+    };
+  } catch {
+    // A malformed/unreadable auth file must not hide the sidecar accounts.
+    return undefined;
+  }
+}
+
 function describe(account: ManagedAccount): string {
   const state = !account.enabled
     ? "disabled"
     : account.expiresAt !== undefined && account.expiresAt < Date.now() ? "expired" : "active";
-  return `${account.label.padEnd(20)} ${state}`;
+  return `${account.label.padEnd(20)} ${state}${account.primary ? " · primary" : ""}`;
 }
 
 async function listAll(ctx: any): Promise<void> {
@@ -63,7 +86,7 @@ async function listAll(ctx: any): Promise<void> {
   const blocks = await Promise.all(providers.map(async (provider): Promise<string[]> => {
     try {
       const [accounts, mode] = await Promise.all([
-        provider.list(),
+        providerAccounts(provider, primaryAccount),
         provider.routing?.get(),
       ]);
       const routing = mode ? ` · routing: ${mode}` : "";
@@ -81,7 +104,7 @@ async function listAll(ctx: any): Promise<void> {
 }
 
 async function pickAccount(ctx: any, provider: AccountProvider): Promise<string | undefined> {
-  const accounts = await provider.list();
+  const accounts = (await provider.list()).filter((account) => !account.primary);
   if (accounts.length === 0) {
     ctx.ui.notify(`No ${provider.label} accounts yet. Add one with /accounts add ${provider.id}.`, "info");
     return undefined;
@@ -110,7 +133,7 @@ export function registerAccountCommands(pi: ExtensionAPI): void {
   const pendingState = new Map<string, AccountState>();
 
   const rows = async () => {
-    const list = await accountRows(accountProviders());
+    const list = await accountRows(accountProviders(), primaryAccount);
     pendingState.clear();
     for (const row of list) pendingState.set(row.id, row.state);
     return list;
@@ -158,8 +181,8 @@ export function registerAccountCommands(pi: ExtensionAPI): void {
       ctx.ui.notify("Renaming an account requires interactive Pi mode.", "error");
       return;
     }
-    const list = await accountRows(accountProviders());
-    const renameable = list.filter((row) => accountProvider(row.providerId)?.rename);
+    const list = await accountRows(accountProviders(), primaryAccount);
+    const renameable = list.filter((row) => !row.primary && accountProvider(row.providerId)?.rename);
     if (renameable.length === 0) {
       ctx.ui.notify("No accounts can be renamed.", "info");
       return;

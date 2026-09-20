@@ -20,10 +20,17 @@ export interface RemoteSection {
   workers: Record<string, unknown>[];
 }
 
+export type BetterCompactMode = "off" | "on" | "jev";
+
+export interface CompactSection {
+  better: BetterCompactMode;
+}
+
 export interface PiPlusConfig {
   env: Record<string, string>;
   policy: PolicySection;
   remote: RemoteSection;
+  compact: CompactSection;
 }
 
 const DEFAULTS: PiPlusConfig = {
@@ -34,6 +41,7 @@ const DEFAULTS: PiPlusConfig = {
     deny: [],
   },
   remote: { injectStatus: true, workers: [] },
+  compact: { better: "off" },
 };
 
 /** Legacy file -> section, applied only when that section is still absent. */
@@ -103,6 +111,7 @@ export function configPath(): string {
 }
 
 function normalize(raw: Partial<PiPlusConfig> | undefined): PiPlusConfig {
+  const better = raw?.compact?.better;
   return {
     env: raw?.env && typeof raw.env === "object" ? { ...raw.env } : {},
     policy: {
@@ -116,6 +125,9 @@ function normalize(raw: Partial<PiPlusConfig> | undefined): PiPlusConfig {
       injectStatus: raw?.remote?.injectStatus !== false,
       defaults: raw?.remote?.defaults,
       workers: Array.isArray(raw?.remote?.workers) ? raw.remote.workers : [],
+    },
+    compact: {
+      better: better === "on" || better === "jev" ? better : "off",
     },
   };
 }

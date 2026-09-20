@@ -37,6 +37,7 @@
       "./src/domains/setup/index.ts",
       "./src/domains/subscriptions/index.ts",
       "./src/domains/models/index.ts",
+      "./src/domains/compact/index.ts",
       "./src/domains/workflows/index.ts",
       "./src/domains/agents/index.ts",
       "./src/domains/remote/index.ts"
@@ -64,6 +65,7 @@
     "version:next": "node scripts/bump-version.mjs --dry-run"
   },
   "devDependencies": {
-    "oxlint": "^1.83.0"
+    "oxlint": "^1.83.0",
+    "typescript": "5.9.3"
   }
 }

@@ -1,11 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type { AccountContext, AccountProvider, ManagedAccount, RoutingMode } from "../../../core/accounts/registry.ts";
+import { anthropicAccountIdentity } from "../../../core/anthropic/identity.ts";
 import { authorize, exchange } from "../../../core/anthropic/oauth.ts";
+import { ensureAccessToken } from "../../../core/anthropic/quota.ts";
 import {
   getRoutingMode,
   loadAccounts,
   saveAccount,
   setRoutingMode,
+  type Account,
 } from "../../../core/anthropic/store.ts";
 
 /**
@@ -40,21 +43,44 @@ async function authenticate(ctx: AccountContext): Promise<{ access: string; refr
   return { access: result.access, refresh: result.refresh, expires: result.expires };
 }
 
+/** Resolves and persists identity once; token rotation does not change it. */
+async function stableIdentity(account: Account): Promise<string | undefined> {
+  if (account.identity) return account.identity;
+  let access = account.access;
+  if (!access || (typeof account.expires === "number" && account.expires <= Date.now())) {
+    try { access = await ensureAccessToken(account); } catch { return undefined; }
+  }
+  if (!access) return undefined;
+  const identity = await anthropicAccountIdentity(access);
+  if (!identity) return undefined;
+
+  const current = loadAccounts()?.accounts.find((candidate) => candidate.id === account.id);
+  if (current && !current.identity) saveAccount({ ...current, identity });
+  return identity;
+}
+
 export const anthropicAccounts: AccountProvider = {
   id: "anthropic",
   label: "Claude",
 
   async list(): Promise<ManagedAccount[]> {
-    const storage = loadAccounts();
-    return (storage?.accounts ?? [])
-      .filter((account) => account.type === "oauth")
-      .map((account) => ({
+    const accounts = (loadAccounts()?.accounts ?? []).filter((account) => account.type === "oauth");
+    const result: ManagedAccount[] = [];
+    // Bootstrap is deliberately serial: this is a one-time migration for old
+    // rows, and concurrent profile requests can be throttled independently.
+    for (const account of accounts) {
+      result.push({
         id: account.id,
         label: account.label ?? account.id.slice(0, 8),
         enabled: account.enabled !== false,
         expiresAt: typeof account.expires === "number" ? account.expires : undefined,
-      }));
+        identity: await stableIdentity(account),
+      });
+    }
+    return result;
   },
+
+  identify: anthropicAccountIdentity,
 
   async add(ctx, label): Promise<string | undefined> {
     const proceed = await ctx.ui.confirm(
@@ -67,6 +93,7 @@ export const anthropicAccounts: AccountProvider = {
     if (!result) return undefined;
 
     const now = Date.now();
+    const identity = await anthropicAccountIdentity(result.access);
     saveAccount({
       id: randomUUID(),
       label,
@@ -77,6 +104,7 @@ export const anthropicAccounts: AccountProvider = {
       expires: result.expires,
       addedAt: now,
       lastRefreshedAt: now,
+      identity,
       authLineageId: randomUUID(),
     });
     return label;
@@ -94,12 +122,16 @@ export const anthropicAccounts: AccountProvider = {
     const result = await authenticate(ctx);
     if (!result) return undefined;
 
+    const identity = await anthropicAccountIdentity(result.access);
     saveAccount({
       ...account,
       access: result.access,
       refresh: result.refresh,
       expires: result.expires,
       lastRefreshedAt: Date.now(),
+      lastRefreshError: undefined,
+      identity,
+      quota: undefined,
       authLineageId: randomUUID(),
     });
     return account.label ?? account.id;

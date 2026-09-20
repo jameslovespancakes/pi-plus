@@ -1,4 +1,5 @@
 import { assertWorkflowBudgetAvailable } from "./budget.ts";
+import { combinedAgentAttemptError } from "./agent-failure.ts";
 import { WorkflowAgentTimeoutError } from "./agent-limits.ts";
 import { abortReason, linkAbortSignal, throwIfAborted } from "./cancellation.ts";
 import { executeAgentAttempt } from "./agent-attempt.ts";
@@ -82,6 +83,7 @@ export async function runAgent(
 
           let attemptPlan: AgentReplayPlan = replay;
           let providerRetries = 0;
+          const priorAttemptFailures: unknown[] = [];
           while (true) {
             let outcome: AgentAttemptResult;
             try {
@@ -95,25 +97,36 @@ export async function runAgent(
                 label,
                 rowId,
                 tags,
-                admitLiveAgent: liveScope.admit,
+                reserveLiveAgent: liveScope.reserve,
               });
             } catch (error) {
-              if (!(error instanceof WorkflowProviderError) || !error.retryable) throw error;
+              if (!(error instanceof WorkflowProviderError) || !error.retryable) {
+                throw priorAttemptFailures.length > 0
+                  ? combinedAgentAttemptError(label, priorAttemptFailures, error)
+                  : error;
+              }
               if (providerRetries >= agentRc.agentRetries) {
                 if (agentRc.agentRetries > 0) {
                   rc.progress.log(`${label}: transient provider failure after ${providerRetries} retries; giving up`);
                 }
-                throw error;
+                throw priorAttemptFailures.length > 0
+                  ? combinedAgentAttemptError(label, priorAttemptFailures, error)
+                  : error;
               }
 
-              assertWorkflowBudgetAvailable(agentRc.budget);
-              providerRetries++;
-              const delayMs = agentRetryDelayMs(providerRetries);
-              rc.progress.log(`${label}: transient provider failure; retry ${providerRetries}/${agentRc.agentRetries} in ${delayMs}ms`);
-              rc.perf.counter("agent.provider_retry", 1, tags);
-              rc.perf.observe("agent.provider_retry_delay_ms", delayMs, tags);
-              attemptPlan = { kind: "off" };
-              await agentRc.retryScheduler.sleep(delayMs, agentRc.signal);
+              priorAttemptFailures.push(error);
+              try {
+                assertWorkflowBudgetAvailable(agentRc.budget);
+                providerRetries++;
+                const delayMs = agentRetryDelayMs(providerRetries);
+                rc.progress.log(`${label}: transient provider failure; retry ${providerRetries}/${agentRc.agentRetries} in ${delayMs}ms`);
+                rc.perf.counter("agent.provider_retry", 1, tags);
+                rc.perf.observe("agent.provider_retry_delay_ms", delayMs, tags);
+                attemptPlan = { kind: "off" };
+                await agentRc.retryScheduler.sleep(delayMs, agentRc.signal);
+              } catch (retryError) {
+                throw combinedAgentAttemptError(label, priorAttemptFailures, retryError);
+              }
               continue;
             }
             const settlement = await settleAgentAttempt({ rc: agentRc, label, tags, replay: attemptPlan, outcome });
@@ -151,15 +164,24 @@ function createAgentLiveScope(rc: RunContext, label: string) {
 
   return {
     signal: controller.signal,
-    admit() {
-      rc.agentLimiter.admit(controller.signal);
-      if (timerStarted || rc.agentTimeoutMs === null) return;
-      timerStarted = true;
-      const timeoutMs = rc.agentTimeoutMs;
-      timer = setTimeout(
-        () => controller.abort(new WorkflowAgentTimeoutError(label, timeoutMs)),
-        timeoutMs,
-      );
+    reserve() {
+      const reservation = rc.agentLimiter.reserve(controller.signal);
+      let committed = false;
+      return {
+        commit() {
+          if (committed) return;
+          reservation.commit();
+          committed = true;
+          if (timerStarted || rc.agentTimeoutMs === null) return;
+          timerStarted = true;
+          const timeoutMs = rc.agentTimeoutMs;
+          timer = setTimeout(
+            () => controller.abort(new WorkflowAgentTimeoutError(label, timeoutMs)),
+            timeoutMs,
+          );
+        },
+        release: () => reservation.release(),
+      };
     },
     dispose() {
       if (timer) clearTimeout(timer);

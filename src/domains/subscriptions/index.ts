@@ -16,9 +16,9 @@ export default function subscriptions(pi: ExtensionAPI) {
   }
 
   registerAnthropicProvider(pi);
-  for (const spec of [CODEX_SPEC, KIMI_SPEC, XAI_SPEC]) {
-    registerPooledOAuthProvider(pi, spec);
-  }
+  registerPooledOAuthProvider(pi, CODEX_SPEC);
+  registerPooledOAuthProvider(pi, KIMI_SPEC);
+  registerPooledOAuthProvider(pi, XAI_SPEC);
 
   registerAccountCommands(pi);
   registerRoutingCommands(pi);

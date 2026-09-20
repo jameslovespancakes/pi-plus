@@ -210,6 +210,16 @@ export async function runResolvedWorkflow(
     );
   });
 
+  const workflowPause = workflowOutcome.ok
+    ? undefined
+    : backgroundPauseError(workflowOutcome.error, ctx.signal, resolvedOptions.signal);
+  const willPauseWorkflow = workflowPause !== undefined
+    && (!(workflowPause instanceof WorkflowProviderUsageLimitError) || resolvedOptions.background !== undefined);
+  const preserveFailedWorktrees = !workflowOutcome.ok
+    && !willPauseWorkflow
+    && !ctx.signal?.aborted
+    && !resolvedOptions.signal?.aborted;
+  if (preserveFailedWorktrees) worktrees.preserveRecoverable();
   const finalizationOutcome = await captureOutcome(() =>
     finalizeWorkflowRun({
       cwd: ctx.cwd,
@@ -219,9 +229,14 @@ export async function runResolvedWorkflow(
       progress,
       runStore,
       worktrees,
+      preserveWorktrees: preserveFailedWorktrees,
       unlinkSignals: [unlinkContextAbortSignal, unlinkOptionAbortSignal],
     }),
   );
+  const retainedPaths = preserveFailedWorktrees ? worktrees.preservedPaths : [];
+  const terminalWorkflowError = workflowOutcome.ok
+    ? undefined
+    : withRetainedWorktrees(workflowOutcome.error, retainedPaths);
 
   if (workflowOutcome.ok && finalizationOutcome.ok) {
     durableRun.transition({
@@ -232,16 +247,16 @@ export async function runResolvedWorkflow(
     });
   } else if (!workflowOutcome.ok) {
     const error = finalizationOutcome.ok
-      ? workflowOutcome.error
-      : combinedWorkflowError(workflowOutcome.error, finalizationOutcome.error);
-    persistTerminalWorkflowError(error);
+      ? terminalWorkflowError!
+      : combinedWorkflowError(terminalWorkflowError!, finalizationOutcome.error);
+    persistTerminalWorkflowError(error, workflowOutcome.error);
   } else if (!finalizationOutcome.ok) {
     persistTerminalWorkflowError(finalizationOutcome.error);
   }
   await durableRun.flush().catch(() => undefined);
 
-  function persistTerminalWorkflowError(error: unknown): void {
-    const pauseError = backgroundPauseError(error, ctx.signal, resolvedOptions.signal);
+  function persistTerminalWorkflowError(error: unknown, pauseCandidate: unknown = error): void {
+    const pauseError = backgroundPauseError(pauseCandidate, ctx.signal, resolvedOptions.signal);
     if (pauseError) {
       if (pauseError instanceof WorkflowProviderUsageLimitError) {
         if (resolvedOptions.background === undefined) {
@@ -284,8 +299,8 @@ export async function runResolvedWorkflow(
     if (finalizationOutcome.ok) return workflowOutcome.value;
     throw finalizationOutcome.error;
   }
-  if (finalizationOutcome.ok) throw workflowOutcome.error;
-  throw combinedWorkflowError(workflowOutcome.error, finalizationOutcome.error);
+  if (finalizationOutcome.ok) throw terminalWorkflowError;
+  throw combinedWorkflowError(terminalWorkflowError, finalizationOutcome.error);
 }
 
 function backgroundPauseError(error: unknown, ...signals: Array<AbortSignal | undefined>): unknown {
@@ -314,6 +329,7 @@ interface WorkflowFinalizationInput {
   readonly progress: ProgressTracker;
   readonly runStore: WorkflowRunStore;
   readonly worktrees: WorktreeRegistry;
+  readonly preserveWorktrees: boolean;
   readonly unlinkSignals: readonly (() => void)[];
 }
 
@@ -340,11 +356,22 @@ async function finalizeWorkflowRun(input: WorkflowFinalizationInput): Promise<vo
         criticality: "required" as const,
         run,
       })),
-      {
-        name: "worktree cleanup",
-        criticality: "required",
-        run: () => input.worktrees.removeAll(),
-      },
+      input.preserveWorktrees
+        ? {
+            name: "worktree cleanup and retention",
+            criticality: "required",
+            run: async () => {
+              await input.worktrees.removeUnpreserved();
+              for (const path of input.worktrees.preservedPaths) {
+                input.progress.log(`retained failed workflow worktree: ${path}`);
+              }
+            },
+          }
+        : {
+            name: "worktree cleanup",
+            criticality: "required",
+            run: () => input.worktrees.removeAll(),
+          },
       { name: "journal pruning", criticality: "best-effort", run: () => pruneWorkflowJournals(input.cwd) },
       { name: "run record pruning", criticality: "best-effort", run: () => input.runStore.prune() },
       { name: "progress completion", criticality: "best-effort", run: () => input.progress.done() },
@@ -368,6 +395,15 @@ async function finalizeWorkflowRun(input: WorkflowFinalizationInput): Promise<vo
         }
       },
     },
+  );
+}
+
+function withRetainedWorktrees(error: unknown, paths: readonly string[]): unknown {
+  if (paths.length === 0) return error;
+  const locations = paths.map((path) => `- ${path}`).join("\n");
+  return new Error(
+    `${unknownErrorMessage(error)}\n\nFailed workflow worktree${paths.length === 1 ? "" : "s"} retained for recovery:\n${locations}`,
+    { cause: error },
   );
 }
 

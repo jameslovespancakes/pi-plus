@@ -3,8 +3,16 @@ import { authorize, exchange, refreshToken } from "../../core/anthropic/oauth.ts
 import {
   billingHeader, clientIdentityHeaders, firstUserText, prependPromptBlock, signRequestBody, splitSystemPrompt,
 } from "../../core/anthropic/client-identity.ts";
+import {
+  anthropicAccountIdentity,
+  cachedAnthropicAccountIdentity,
+} from "../../core/anthropic/identity.ts";
 import { ANTHROPIC_MODELS } from "../../core/anthropic/models.ts";
-import { applyQuotaHeaders, refreshAllQuota } from "../../core/anthropic/quota.ts";
+import {
+  ACCESS_REFRESH_INTERVAL_MS,
+  applyQuotaHeaders,
+  refreshAllQuota,
+} from "../../core/anthropic/quota.ts";
 import {
   MAIN_ACCOUNT_ID, familyForModel, selectAccount, type Candidate,
 } from "../../core/anthropic/routing.ts";
@@ -41,6 +49,17 @@ export function routeAccessToken(primary: string, modelId?: string, _sessionId?:
 
   const mode = getRoutingMode(storage);
   const family = familyForModel(modelId);
+  const primaryIdentity = cachedAnthropicAccountIdentity(primary);
+  if (!primaryIdentity) void anthropicAccountIdentity(primary).catch(() => {});
+  const identities = new Set(primaryIdentity ? [primaryIdentity] : []);
+  const sidecars = storage.accounts.filter((account) => {
+    if (account.enabled === false || account.type !== "oauth" || !account.access
+      || typeof account.expires !== "number" || account.expires <= Date.now()) return false;
+    if (!account.identity) return true;
+    if (identities.has(account.identity)) return false;
+    identities.add(account.identity);
+    return true;
+  });
 
   const candidates: Candidate[] = [
     {
@@ -50,9 +69,10 @@ export function routeAccessToken(primary: string, modelId?: string, _sessionId?:
       order: 0,
       lastUsed: accountLastUsed.get(MAIN_ACCOUNT_ID) ?? Number(storage.main?.lastUsed ?? 0),
     },
-    ...storage.accounts
-      .filter((a) => a.enabled !== false && a.type === "oauth" && a.access)
-      .map((a, index) => ({
+    // Never route an expired/unknown-lifetime sidecar while its asynchronous
+    // refresher catches up; falling back to pi's primary is safer than a 401.
+    // Stable identities also keep duplicate logins from inflating the pool.
+    ...sidecars.map((a, index) => ({
         id: a.id,
         access: a.access,
         quota: a.quota,
@@ -150,12 +170,33 @@ export function registerAnthropicProvider(pi: ExtensionAPI): void {
     }
   });
 
-  /** Refreshes stale idle-account quota when a message starts. */
+  /**
+   * Keep rotating sidecar credentials even while their quota snapshot is fresh.
+   * CortexKit refreshes fallbacks on an independent background cadence for the
+   * same reason: quota freshness is not credential freshness.
+   */
+  let refreshTimer: ReturnType<typeof setInterval> | undefined;
+  const startRefreshLoop = () => {
+    if (refreshTimer) return;
+    refreshTimer = setInterval(
+      () => void refreshAllQuota().catch(() => {}),
+      ACCESS_REFRESH_INTERVAL_MS + Math.floor(Math.random() * 30_000),
+    );
+    refreshTimer.unref?.();
+  };
+
   pi.on("input", async () => {
+    startRefreshLoop();
     void refreshAllQuota().catch(() => {});
   });
 
   pi.on("session_start", async () => {
+    startRefreshLoop();
     void refreshAllQuota().catch(() => {});
+  });
+
+  pi.on("session_shutdown", async () => {
+    if (refreshTimer) clearInterval(refreshTimer);
+    refreshTimer = undefined;
   });
 }

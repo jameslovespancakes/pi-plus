@@ -61,7 +61,7 @@ quota-aware routing.
 Your live quota, always in the footer:
 
 ```
-  Claude Σ2 · 2/2 ready · partial                 Codex · pro
+  Claude Σ2 · 2/2 ready                           Codex · pro
   5h     █████████████████░░░░░░░░░   65% 1h     5h     ███████████████████████░░░   88% 57m
   weekly ███████████████░░░░░░░░░░░   58% 3d     weekly ████████████████████████░░   93% 6d
   Fable  ████████████░░░░░░░░░░░░░░  ~47% 3d
@@ -154,6 +154,25 @@ across every running pi agent. `/board` opens the messaging view:
 any Mac or Linux host over SSH, where launchd or systemd brings it back after a
 reboot.
 
+### Compact without deleting the source
+
+Better Compact replaces Pi's normal compaction with a reversible local archive,
+deterministic protection and extractive compression. Jev mode adds six-signal
+routing through OpenRouter's decisions API; Jev ranks compression but cannot
+override protected facts or authorize source deletion.
+
+```
+/compact better on    # switch to local deterministic routing and compact now
+/compact better jev   # switch to Jev routing and compact now
+/compact better off   # restore Pi compaction and compact now
+```
+
+The selected mode persists for later manual and automatic compactions. Jev mode
+requires `OPENROUTER_API_KEY` (or OpenRouter auth configured in Pi). Original
+chunks stay under `~/.pi/agent/super-context/archives/`; the
+`super_context_recall` tool performs bounded retrieval from the current branch's
+checkpoint.
+
 ### Orchestrate repeatable workflows
 
 The built-in workflow engine runs named or inline multi-agent workflows with
@@ -194,11 +213,12 @@ with workflow options when a task needs them.
 | `/remote add \| rename \| remove` | jump to one step |
 | `/board` | live agent board UI |
 | `/board setup \| restart \| clear \| status` | manage the board server |
+| `/compact better on \| off \| jev` | select reversible compaction and compact now |
 | `/workflow` | open the running workflow agent board |
 | `/workflow <name> [args]` | run a bundled workflow |
 
 **Tools available to the agent:** `workflow`, `list_models`, `agent_board`,
-`remote_status`, `remote_test`.
+`remote_status`, `remote_test`, `super_context_recall`.
 
 ---
 
@@ -210,7 +230,8 @@ Everything lives in one file, `~/.pi/agent/pi-plus.json`, created on first use:
 {
   "env":    { "ARTIFICIAL_ANALYSIS_API_KEY": "aa_…", "AGENT_BOARD_URL": "ws://…" },
   "policy": { "autoApprove": [], "requireApproval": [], "deny": [] },
-  "remote": { "workers": [] }
+  "remote": { "workers": [] },
+  "compact": { "better": "off" }
 }
 ```
 

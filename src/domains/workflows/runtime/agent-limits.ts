@@ -25,6 +25,13 @@ export class WorkflowAgentTimeoutError extends Error {
 }
 
 /** Shared run-level admission counter. Cache hits do not call admit(). */
+export interface WorkflowAgentReservation {
+  /** Permanently count this reservation as a live model attempt. */
+  commit(): void;
+  /** Return an uncommitted reservation after setup or replay succeeds/fails. */
+  release(): void;
+}
+
 export class WorkflowAgentLimiter {
   readonly maxAgents: number | null;
   private admitted = 0;
@@ -33,11 +40,27 @@ export class WorkflowAgentLimiter {
     this.maxAgents = maxAgents;
   }
 
-  admit(signal: AbortSignal | undefined): void {
+  reserve(signal: AbortSignal | undefined): WorkflowAgentReservation {
     throwIfAborted(signal);
     if (this.maxAgents !== null && this.admitted >= this.maxAgents) {
       throw new WorkflowAgentLimitError(this.maxAgents);
     }
     this.admitted++;
+    let state: "pending" | "committed" | "released" = "pending";
+    return {
+      commit() {
+        if (state === "released") throw new Error("Cannot commit a released workflow agent reservation.");
+        state = "committed";
+      },
+      release: () => {
+        if (state !== "pending") return;
+        state = "released";
+        this.admitted--;
+      },
+    };
+  }
+
+  admit(signal: AbortSignal | undefined): void {
+    this.reserve(signal).commit();
   }
 }

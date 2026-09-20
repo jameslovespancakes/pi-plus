@@ -106,6 +106,8 @@ let pathCounter = 0;
 export class WorktreeRegistry {
   private readonly paths = new Set<string>();
   private readonly snapshots = new Set<string>();
+  private readonly recoverable = new Set<string>();
+  private readonly preserved = new Set<string>();
   private readonly removals = new Map<string, Promise<WorktreeGitCommandResult>>();
   private readonly repoCwd: string;
   private readonly runner: WorktreeGitRunner;
@@ -123,8 +125,29 @@ export class WorktreeRegistry {
     return this.paths.size;
   }
 
+  /** Failed worktrees retained for manual recovery. */
+  get preservedPaths(): readonly string[] {
+    return [...this.preserved].filter((path) => this.paths.has(path)).sort();
+  }
+
   register(path: string): void {
     this.paths.add(path);
+  }
+
+  /** Marks a worktree where a live agent could have produced useful edits. */
+  markRecoverable(path: string): void {
+    if (this.paths.has(path)) this.recoverable.add(path);
+  }
+
+  preserve(path: string): void {
+    if (this.paths.has(path)) this.preserved.add(path);
+  }
+
+  /** Retain only worktrees that reached a live agent, not empty setup/replay worktrees. */
+  preserveRecoverable(): void {
+    for (const path of this.recoverable) {
+      if (this.paths.has(path)) this.preserved.add(path);
+    }
   }
 
   async probe(signal?: AbortSignal): Promise<GitWorktreeProbe> {
@@ -183,8 +206,17 @@ export class WorktreeRegistry {
   }
 
   async removeAll(): Promise<readonly WorktreeRemovalOutcome[]> {
+    return await this.removePaths([...this.paths]);
+  }
+
+  /** Remove disposable worktrees while leaving failed ones available for recovery. */
+  async removeUnpreserved(): Promise<readonly WorktreeRemovalOutcome[]> {
+    return await this.removePaths([...this.paths].filter((path) => !this.preserved.has(path)));
+  }
+
+  private async removePaths(paths: readonly string[]): Promise<readonly WorktreeRemovalOutcome[]> {
     const outcomes = await Promise.all(
-      [...this.paths].map(async (path) => ({
+      paths.map(async (path) => ({
         path,
         ...(await this.remove(path)),
       })),
@@ -209,6 +241,8 @@ export class WorktreeRegistry {
     if (result.ok) {
       this.paths.delete(path);
       this.snapshots.delete(path);
+      this.recoverable.delete(path);
+      this.preserved.delete(path);
     }
     return result;
   }

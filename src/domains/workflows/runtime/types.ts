@@ -143,7 +143,7 @@ export interface AgentOptions<S extends TSchema = TSchema> {
   /**
    * Resume policy for this call. Shared-workspace agents run live unless they
    * explicitly declare themselves read-only. Those calls bind replay to the full
-   * Git-visible workspace; isolated agents bind to their disposable baseline.
+   * Git-visible workspace; isolated agents bind to their isolated baseline.
    * Use "off" to disable both journal reads and writes.
    */
   resume?: AgentResumePolicy;
@@ -154,7 +154,7 @@ export interface AgentOptions<S extends TSchema = TSchema> {
    * `resume: "off"` when their bounded contents cannot be captured.
    */
   resumeInputs?: readonly string[];
-  /** Run this agent in a disposable git worktree and return its patch with the result. */
+  /** Run in an isolated git worktree. Successful runs clean it up; failed runs retain it for recovery. */
   isolation?: "worktree";
   /** Apply a captured candidate to a fresh isolated baseline before evaluation. */
   candidatePatch?: { readonly baselineOid: string; readonly patch: string };
@@ -187,12 +187,12 @@ export interface AgentOptions<S extends TSchema = TSchema> {
  * exports `meta` plus a default `async (api: WorkflowApi) => result`.
  */
 export interface WorkflowApi {
-  /** Run a schema subagent in a disposable worktree and return its structured result plus patch. */
+  /** Run a schema subagent in an isolated worktree and return its structured result plus patch. */
   agent<S extends TSchema>(
     prompt: string,
     opts: AgentOptions<S> & { schema: S; isolation: "worktree" },
   ): Promise<IsolatedAgentResult<Static<S>>>;
-  /** Run a text subagent in a disposable worktree and return its final text plus patch. */
+  /** Run a text subagent in an isolated worktree and return its final text plus patch. */
   agent(prompt: string, opts: AgentOptions & { isolation: "worktree" }): Promise<IsolatedAgentResult<string>>;
   /** Run a subagent and return validated structured output; rejects with a recoverable typed error on repair exhaustion. */
   agent<S extends TSchema>(prompt: string, opts: AgentOptions<S> & { schema: S }): Promise<Static<S>>;

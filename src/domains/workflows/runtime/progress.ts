@@ -4,7 +4,7 @@ import type { AgentChatMessage, AgentChatRole, AgentRowStatus, WorkflowLaneItemS
 import { formatWorkflowUsageLine, type WorkflowUsageSnapshot } from "./usage.ts";
 import { unknownErrorMessage } from "./unknown-error.ts";
 import { statusTextFromCounts, type WorkflowStatusCounts } from "./ui/workflow-format.ts";
-import { toDisplayLine } from "./ui/display-text.ts";
+import { toDisplayLine, toDisplayText } from "./ui/display-text.ts";
 import { renderWorkflowWidgetLines } from "./ui/workflow-widget.ts";
 
 export type {
@@ -304,7 +304,7 @@ export class ProgressTracker {
   }
 
   private appendAgentChat(id: number, role: AgentChatRole, text: string): void {
-    const value = toDisplayLine(text, AGENT_CHAT_TEXT_LIMIT);
+    const value = toDisplayText(text, AGENT_CHAT_TEXT_LIMIT);
     if (!value) return;
     const messages = this.agentChats.get(id) ?? [];
     messages.push({ role, text: value, createdAt: Date.now() });

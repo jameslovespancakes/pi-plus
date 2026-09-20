@@ -8,6 +8,48 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+### Added
+
+- Better Compact, a reversible compaction mode with trust-aware chunking,
+  content-addressed checkpoints, an append-only local source archive, extractive
+  compression, and optional Jev routing through OpenRouter's decisions API.
+- `super_context_recall` for bounded exact retrieval from the current archived
+  checkpoint.
+- Stable Anthropic account identity discovery and regression coverage for
+  rotating-token refresh, duplicate accounts, archive safety, and workflow UI
+  theming.
+
+### Changed
+
+- The workflow inspector now uses Pi's active theme for chat, Markdown, tool,
+  selection, input, and border styling, preserves multiline messages, and opens
+  as a smaller 70% modal.
+- `/compact better` modes now appear in argument autocomplete, and enabled modes
+  use a themed green `Better Compact` footer status instead of an internal label.
+- `/accounts` includes Pi's primary credential, prevents it from being toggled
+  or renamed, and collapses sidecar logins that resolve to the same provider
+  identity.
+- Agent-board context snapshots are compact, stable turn-boundary messages;
+  live deliveries are batched instead of repeatedly injecting volatile prompt
+  and tool arguments.
+- TypeScript is pinned for reproducible checks and the project config no longer
+  contains machine-specific module-resolution paths.
+
+### Fixed
+
+- Anthropic sidecar credentials now refresh independently of quota polling,
+  rotate under in-process and cross-process locks, use bounded requests, and
+  cannot be overwritten by a stale quota snapshot. Expired sidecars are no
+  longer routed while refresh catches up.
+- Codex pooled routing now uses atomic, change-gated persistence, preserves rich
+  quota snapshots, bounds OAuth refreshes, and avoids serializing infinite
+  account blocks.
+- Failed isolated workflow runs retain recoverable worktrees and report their
+  paths instead of deleting unfinished edits. Retry failures now preserve both
+  the original provider error and any final agent-limit error.
+- Workflow run records retain per-agent failure details, and the subscription
+  footer no longer shows the noisy `partial` title suffix.
+
 ## [1.0.12] - 2026-09-19
 
 ### Added

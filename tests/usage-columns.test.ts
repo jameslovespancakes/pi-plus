@@ -31,6 +31,7 @@ test("the real windows still render with values", () => {
   assert.match(joined, /5h/);
   assert.match(joined, /weekly/);
   assert.match(joined, /2\/2 ready/, "both accounts pool");
+  assert.doesNotMatch(lines[0] ?? "", /\bpartial\b/, "footer title stays concise");
   // Each line carries Claude on the left and Codex on the right, so assert
   // against the Claude half only: Codex is legitimately n/a with no accounts.
   // Escapes must be stripped first, or the midpoint lands inside a colour

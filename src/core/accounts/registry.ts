@@ -9,6 +9,8 @@ export interface ManagedAccount {
   expiresAt?: number;
   /** True for the account pi itself is authenticated as. */
   primary?: boolean;
+  /** Provider-stable identity used only to collapse duplicate logins. */
+  identity?: string;
 }
 
 /** Fixed account order or provider quota-aware selection. */
@@ -41,6 +43,8 @@ export interface AccountProvider {
   /** Human name, e.g. "Claude". */
   label: string;
   list(): Promise<ManagedAccount[]>;
+  /** Resolves a provider-stable identity from an OAuth access token. */
+  identify?(accessToken: string): string | undefined | Promise<string | undefined>;
   /** Returns the label of the account that was added. */
   add(ctx: AccountContext, label: string): Promise<string | undefined>;
   /** Returns the label of the account that was reauthorized. */

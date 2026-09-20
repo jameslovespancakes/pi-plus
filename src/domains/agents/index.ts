@@ -11,11 +11,14 @@ import { Type } from "typebox";
 import WebSocket from "ws";
 import { env } from "../../core/env.ts";
 import { handleBoardAdmin, registerBoardLifecycle } from "./board-setup.ts";
+import { formatBoardDeliveries, formatBoardSnapshot, type BoardDelivery } from "./format.ts";
 
 const HEARTBEAT_MS = 8_000;
 const REQUEST_TIMEOUT_MS = 2_000;
 const SNAPSHOT_CACHE_MS = 1_500;
 const MESSAGE_MAX = 8_000;
+const DELIVERY_DEBOUNCE_MS = 250;
+const DELIVERY_BATCH_MAX = 8;
 
 type State = "idle" | "thinking" | "tool";
 type Priority = "normal" | "urgent";
@@ -302,6 +305,9 @@ export default function (pi: ExtensionAPI) {
   let self: AgentInfo | undefined;
   let gitInfo: GitInfo = {};
   let snapshot: { at: number; agents: AgentInfo[] } = { at: 0, agents: [] };
+  let lastInjectedSnapshot: string | undefined;
+  let pendingDeliveries: BoardDelivery[] = [];
+  let deliveryTimer: ReturnType<typeof setTimeout> | undefined;
 
   const updateStatus = () => {
     if (!ctx?.hasUI) return;
@@ -315,43 +321,46 @@ export default function (pi: ExtensionAPI) {
     self = { ...self, ...gitInfo };
     client.presence(gitInfo);
   };
-  const formatCoordination = (): string[] => {
-    const { coordinator, reports, repoThread } = client.coordination;
-    const lines: string[] = [];
-    if (coordinator) lines.push(`You report to coordinator '${coordinator}'. Use agent_board action 'report' to send them progress, blockers, and completed work.`);
-    if (reports?.length) lines.push(`You are the coordinator for: ${reports.join(", ")}. Their reports arrive as agent-board messages; keep their work aligned.`);
-    if (repoThread) lines.push(`Shared repo room: thread '${repoThread}' automatically contains every agent working in this repository. Post repo-wide notices there with agent_board send.`);
-    return lines;
+  const snapshotAgents = async (): Promise<AgentInfo[]> => {
+    if (Date.now() - snapshot.at > SNAPSHOT_CACHE_MS) {
+      snapshot = { at: Date.now(), agents: await client.request("agents", {}, 500) };
+    }
+    return snapshot.agents;
   };
-  const formatSnapshot = (agents: AgentInfo[]): string => {
-    const coordinationLines = formatCoordination();
-    if (!agents.length) return ["[Live agent board]\nNo other Pi agents are currently running.", ...coordinationLines].join("\n");
-    const lines = agents.slice(0, 20).map((agent) => {
-      const commit = agent.commit ? agent.commit.slice(0, 12) : "no-commit";
-      const sameLine = agent.repo && gitInfo.repo === agent.repo && agent.branch === gitInfo.branch;
-      const divergent = sameLine && agent.commit && gitInfo.commit && agent.commit !== gitInfo.commit ? " ⚠ different commit" : "";
-      const activity = agent.state === "tool" && agent.lastTool ? agent.lastTool : agent.state;
-      const role = agent.reports?.length ? " [coordinator]" : agent.coordinator ? ` [reports to ${agent.coordinator}]` : "";
-      return `- ${agent.alias || agent.sessionId.slice(0, 8)}@${agent.host}${role}: ${activity}; ${agent.branch || "-"}@${commit}${divergent}${agent.lastPrompt ? `; ${agent.lastPrompt}` : ""}`;
-    });
-    return [
-      `[Live agent board, consult before working]`,
-      `Your commit: ${gitInfo.branch || "-"}@${gitInfo.commit?.slice(0, 12) || "no-commit"}`,
-      `Running collaborators:`,
-      lines.join("\n"),
-      ...coordinationLines,
-      `Avoid duplicate or outdated work. Use agent_board to coordinate when useful.`,
-    ].join("\n");
+  const flushDeliveries = () => {
+    if (deliveryTimer) clearTimeout(deliveryTimer);
+    deliveryTimer = undefined;
+    const deliveries = pendingDeliveries;
+    pendingDeliveries = [];
+    if (!ctx || !deliveries.length) return;
+    const urgent = deliveries.some(({ message }) => message.priority === "urgent");
+    if (urgent && !ctx.isIdle()) ctx.abort();
+    const details = deliveries.length === 1 ? deliveries[0] : { deliveries };
+    pi.sendMessage(
+      { customType: "agent-board", content: formatBoardDeliveries(deliveries), display: true, details },
+      { deliverAs: "steer", triggerTurn: true },
+    );
+  };
+  const queueDelivery = (delivery: BoardDelivery) => {
+    pendingDeliveries.push(delivery);
+    if (delivery.message.priority === "urgent" || pendingDeliveries.length >= DELIVERY_BATCH_MAX) {
+      flushDeliveries();
+      return;
+    }
+    if (deliveryTimer) return;
+    deliveryTimer = setTimeout(flushDeliveries, DELIVERY_DEBOUNCE_MS);
+    deliveryTimer.unref?.();
   };
 
   client.on((event) => {
-    if (event.t === "connection" || event.t === "coordination") { updateStatus(); return; }
+    if (event.t === "connection") {
+      if (event.connected) { snapshot.at = 0; lastInjectedSnapshot = undefined; }
+      updateStatus();
+      return;
+    }
+    if (event.t === "coordination") { updateStatus(); return; }
     if (event.t !== "message" || event.adminView || !ctx) return;
-    const message = event.message as BoardMessage;
-    const thread = event.thread as ThreadInfo;
-    const content = `[Live agent-board message${message.priority === "urgent" ? " URGENT" : ""}]\nFrom: ${message.senderAlias || message.senderId}\nThread: ${thread.title || thread.id}\nCommit context: you are on ${gitInfo.branch || "-"}@${gitInfo.commit?.slice(0, 12) || "no-commit"}\n\n${message.text}\n\nEvaluate this at the next decision point. If relevant, adjust your work and reply through agent_board with thread '${thread.id}'. If irrelevant, continue the current task.`;
-    if (message.priority === "urgent" && !ctx.isIdle()) ctx.abort();
-    pi.sendMessage({ customType: "agent-board", content, display: true, details: { message, thread } }, { deliverAs: "steer", triggerTurn: true });
+    queueDelivery({ message: event.message as BoardMessage, thread: event.thread as ThreadInfo });
   });
 
   pi.on("session_start", async (_event, eventCtx) => {
@@ -368,6 +377,16 @@ export default function (pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event) => {
     client.presence({ state: "thinking", lastPrompt: cleanLine(event.prompt) });
     client.activity("prompt", event.prompt);
+    if (!client.connected) return;
+    try {
+      const content = formatBoardSnapshot(await snapshotAgents(), gitInfo, client.coordination);
+      if (content === lastInjectedSnapshot) return;
+      lastInjectedSnapshot = content;
+      // Persist one compact snapshot at a user-turn boundary. A transient message
+      // appended in `context` becomes Anthropic's final cache breakpoint but is
+      // absent from the next transcript, forcing a conversation-cache miss.
+      return { message: { customType: "agent-board-snapshot", content, display: false, details: {} } };
+    } catch { return; }
   });
   pi.on("tool_execution_start", async (event) => {
     const lastTool = cleanLine(`${event.toolName}: ${JSON.stringify(event.args)}`, 100);
@@ -375,20 +394,12 @@ export default function (pi: ExtensionAPI) {
   });
   pi.on("tool_execution_end", async () => client.presence({ state: "thinking" }));
   pi.on("agent_settled", async () => { client.presence({ state: "idle", lastTool: undefined }); refreshGit(); });
-  pi.on("session_shutdown", async (_event, eventCtx) => { client.stop(); eventCtx.ui.setStatus("agent-board", undefined); ctx = undefined; self = undefined; });
-
-  // A transient, late context message avoids growing the session and keeps the static prompt cache stable.
-  pi.on("context", async (event) => {
-    if (!client.connected) return;
-    try {
-      if (Date.now() - snapshot.at > SNAPSHOT_CACHE_MS) snapshot = { at: Date.now(), agents: await client.request("agents", {}, 500) };
-      return {
-        messages: [...event.messages, {
-          role: "custom" as const, customType: "agent-board-snapshot", content: formatSnapshot(snapshot.agents),
-          display: false, details: {}, timestamp: Date.now(),
-        }],
-      };
-    } catch { return; }
+  pi.on("session_compact", async () => { lastInjectedSnapshot = undefined; });
+  pi.on("session_tree", async () => { lastInjectedSnapshot = undefined; });
+  pi.on("session_shutdown", async (_event, eventCtx) => {
+    if (deliveryTimer) clearTimeout(deliveryTimer);
+    deliveryTimer = undefined; pendingDeliveries = [];
+    client.stop(); eventCtx.ui.setStatus("agent-board", undefined); ctx = undefined; self = undefined;
   });
 
   pi.registerMessageRenderer("agent-board", (message, _options, theme) => new Text(theme.fg("accent", message.content as string), 1, 0));
@@ -419,7 +430,7 @@ export default function (pi: ExtensionAPI) {
     description: "Consult and message all currently running local and remote Pi agents. Every agent record includes host, state, Git branch, and commit hash. Messages are live: idle agents wake immediately and busy agents see them at the next safe turn boundary. Stopped agents are never listed and messages are not queued for them. Agents working in the same repository share an auto-created repo room, and coordinators can be assigned so subordinate agents report their progress upward.",
     promptSnippet: "Consult live collaborators, report to your coordinator, and exchange direct, repo-room, or group messages",
     promptGuidelines: [
-      "Consult the transient Live agent board context before starting work; avoid duplicating work and compare Git commit hashes before relying on another agent's changes.",
+      "Consult the latest compact Live agent board snapshot before starting work; avoid duplicating work and compare Git commit hashes before relying on another agent's changes.",
       "Use agent_board to inform collaborators when their commit or assumptions appear outdated, and reply only when coordination is useful.",
       "If the board snapshot names a coordinator for you, use agent_board action 'report' to send them meaningful progress, blockers, and completed work instead of staying silent.",
       "Use agent_board action 'set_coordinator' when the user puts one agent in charge of others, and 'coordinators' to inspect the current reporting structure.",

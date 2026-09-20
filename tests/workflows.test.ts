@@ -6,7 +6,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { Semaphore, parallel } from "../src/domains/workflows/runtime/concurrency.ts";
 import { workflowRunsDir } from "../src/domains/workflows/runtime/journal.ts";
 import { resolveWorkflowRunOptions } from "../src/domains/workflows/runtime/options.ts";
-import { toDisplayLine } from "../src/domains/workflows/runtime/ui/display-text.ts";
+import { toDisplayLine, toDisplayText } from "../src/domains/workflows/runtime/ui/display-text.ts";
 import { WorkflowInspector } from "../src/domains/workflows/runtime/ui/workflow-inspector.ts";
 import { renderWorkflowWidgetLines } from "../src/domains/workflows/runtime/ui/workflow-widget.ts";
 
@@ -37,6 +37,7 @@ test("parallel preserves order and isolates recoverable failures", async () => {
 test("workflow display text is stable and single-line", () => {
   assert.equal(toDisplayLine("one\n\u001B[31mtwo\u001B[0m", 20), "one two");
   assert.equal(toDisplayLine("123456", 5), "1234…");
+  assert.equal(toDisplayText("one\r\n\u001B[31m**two**\u001B[0m", 20), "one\n**two**");
 });
 
 test("workflow records stay outside the repository", () => {
@@ -91,10 +92,15 @@ test("workflow widget is a compact agent board", () => {
 test("workflow board opens agent chat and sends a follow-up", async () => {
   let renders = 0;
   const followUps: string[] = [];
+  const foregrounds: string[] = [];
+  const backgrounds: string[] = [];
   const plainTheme = {
-    fg: (_color: string, text: string) => text,
-    bg: (_color: string, text: string) => text,
+    fg: (color: string, text: string) => { foregrounds.push(color); return text; },
+    bg: (color: string, text: string) => { backgrounds.push(color); return text; },
     bold: (text: string) => text,
+    italic: (text: string) => text,
+    strikethrough: (text: string) => text,
+    underline: (text: string) => text,
   } as any;
   const snapshot = {
     runId: "run-1",
@@ -114,7 +120,11 @@ test("workflow board opens agent chat and sends a follow-up", async () => {
     () => {},
     undefined,
     {
-      conversation: () => [{ role: "task", text: "Review OAuth routing", createdAt: Date.now() }],
+      conversation: () => [
+        { role: "task", text: "Review OAuth routing", createdAt: Date.now() },
+        { role: "tool", text: "read", createdAt: Date.now() },
+        { role: "assistant", text: "# Finding\nToken refresh is safe.", createdAt: Date.now() },
+      ],
       followUp: async (_agentId, message) => { followUps.push(message); },
     },
   );
@@ -122,8 +132,12 @@ test("workflow board opens agent chat and sends a follow-up", async () => {
   board.handleMouse({ type: "click", button: "left", x: 2, y: 5, screenX: 2, screenY: 5, width: 80, height: 24, shift: false, alt: false, ctrl: false });
   const chat = board.render(80);
   assert.match(chat.join("\n"), /Review OAuth routing/);
+  assert.match(chat.join("\n"), /Token refresh is safe/);
   assert.match(chat.join("\n"), /follow-up to this agent/);
   assert.doesNotMatch(chat.join("\n"), /following latest activity/);
+  assert.ok(backgrounds.includes("userMessageBg"));
+  assert.ok(backgrounds.includes("toolPendingBg"));
+  assert.ok(foregrounds.includes("mdHeading"));
   assert.ok(chat.every((line) => visibleWidth(line) <= 80));
 
   for (const char of "Check refresh races") board.handleInput(char);

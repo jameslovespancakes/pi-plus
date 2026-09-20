@@ -29,13 +29,14 @@ async function setup(files: Record<string, unknown> = {}) {
   };
 }
 
-test("a fresh install writes all three sections", async () => {
+test("a fresh install writes every config section", async () => {
   const { module, read, cleanup } = await setup();
   try {
     const config = module.readConfig();
-    assert.deepEqual(Object.keys(config).sort(), ["env", "policy", "remote"]);
+    assert.deepEqual(Object.keys(config).sort(), ["compact", "env", "policy", "remote"]);
     assert.deepEqual(read().policy.requireApproval, config.policy.requireApproval);
     assert.deepEqual(config.remote.workers, []);
+    assert.equal(config.compact.better, "off");
   } finally {
     cleanup();
   }

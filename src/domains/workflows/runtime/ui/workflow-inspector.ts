@@ -1,8 +1,12 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
+  Box,
   Input,
+  Markdown,
   matchesKey,
+  Text,
   type Focusable,
+  type MarkdownTheme,
   type TUI,
   type TuiMouseEvent,
   type TuiMouseEventResult,
@@ -71,7 +75,7 @@ export class WorkflowInspector implements Focusable {
     this.outcome = outcome;
     this.live = live;
     this.input = new Input({
-      prompt: "› ",
+      prompt: this.theme.fg("accent", "› "),
       placeholder: "Send a follow-up to this agent…",
       placeholderStyle: (text) => this.theme.fg("dim", text),
     });
@@ -321,11 +325,52 @@ export class WorkflowInspector implements Focusable {
   }
 
   private chatMessageRows(message: AgentChatMessage, width: number): string[] {
-    const label = chatLabel(message);
-    const timestamp = new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
-    const color = message.role === "status" ? "error" : message.role === "user" ? "accent" : message.role === "tool" ? "muted" : "text";
-    const prefix = `${this.theme.fg("dim", timestamp)}  ${this.theme.fg(color, label.padEnd(6))} `;
-    return wrapTextWithAnsi(`${prefix}${message.text}`, Math.max(1, width - 1)).map((line) => ` ${line}`);
+    if (message.role === "task" || message.role === "user") {
+      const box = new Box(1, 1, (text) => this.theme.bg("userMessageBg", text));
+      box.addChild(new Markdown(
+        message.text,
+        0,
+        0,
+        this.markdownTheme(),
+        { color: (text) => this.theme.fg("userMessageText", text) },
+        { preserveOrderedListMarkers: true, preserveBackslashEscapes: true },
+      ));
+      return box.render(width);
+    }
+
+    if (message.role === "assistant") {
+      return ["", ...new Markdown(message.text, 1, 0, this.markdownTheme()).render(width)];
+    }
+
+    if (message.role === "tool") {
+      const box = new Box(1, 0, (text) => this.theme.bg("toolPendingBg", text));
+      box.addChild(new Text(this.theme.fg("toolTitle", this.theme.bold(message.text)), 0, 0));
+      return box.render(width);
+    }
+
+    return [
+      "",
+      ...new Text(this.theme.fg("error", message.text), 1, 0).render(width),
+    ];
+  }
+
+  private markdownTheme(): MarkdownTheme {
+    return {
+      heading: (text) => this.theme.fg("mdHeading", text),
+      link: (text) => this.theme.fg("mdLink", text),
+      linkUrl: (text) => this.theme.fg("mdLinkUrl", text),
+      code: (text) => this.theme.fg("mdCode", text),
+      codeBlock: (text) => this.theme.fg("mdCodeBlock", text),
+      codeBlockBorder: (text) => this.theme.fg("mdCodeBlockBorder", text),
+      quote: (text) => this.theme.fg("mdQuote", text),
+      quoteBorder: (text) => this.theme.fg("mdQuoteBorder", text),
+      hr: (text) => this.theme.fg("mdHr", text),
+      listBullet: (text) => this.theme.fg("mdListBullet", text),
+      bold: (text) => this.theme.bold(text),
+      italic: (text) => this.theme.italic(text),
+      strikethrough: (text) => this.theme.strikethrough(text),
+      underline: (text) => this.theme.underline(text),
+    };
   }
 
   private agentRow(entry: BoardAgent, index: number, width: number): string {
@@ -373,14 +418,6 @@ export class WorkflowInspector implements Focusable {
     const padding = " ".repeat(Math.max(0, width - visibleWidth(fitted)));
     return `${this.theme.fg("border", "│")} ${fitted}${padding} ${this.theme.fg("border", "│")}`;
   }
-}
-
-function chatLabel(message: AgentChatMessage): string {
-  if (message.role === "task") return "Task";
-  if (message.role === "user") return "You";
-  if (message.role === "assistant") return "Agent";
-  if (message.role === "tool") return "Tool";
-  return "Status";
 }
 
 function shortModel(model: string): string {

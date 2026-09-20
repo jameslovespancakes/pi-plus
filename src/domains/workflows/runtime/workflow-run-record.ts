@@ -279,6 +279,7 @@ function compactWorkflowProgress(snapshot: WorkflowProgressSnapshot): WorkflowPr
         doneAt: agent.doneAt,
         toolUses: agent.toolUses,
         lastTool: agent.lastTool === undefined ? undefined : boundedText(agent.lastTool),
+        error: agent.error === undefined ? undefined : boundedText(agent.error),
       }));
       remainingAgents -= agents.length;
       return { title: boundedText(phase.title), agents };

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ModelAuth, OAuthAuth, OAuthCredential, Provider } from "@earendil-works/pi-ai";
+import type { Api, ModelAuth, OAuthAuth, OAuthCredential, Provider } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AccountContext, AccountProvider, ManagedAccount, RoutingMode } from "../../../core/accounts/registry.ts";
 import {
@@ -15,10 +15,10 @@ import {
   type PooledOAuthStore,
 } from "../../../core/accounts/oauth-pool.ts";
 
-export interface PooledOAuthProviderSpec {
+export interface PooledOAuthProviderSpec<TApi extends Api> {
   id: string;
   label: string;
-  createProvider(): Provider;
+  createProvider(): Provider<TApi>;
   /** Backing storage. Defaults to the shared pi-plus OAuth pool file. */
   store?: PooledOAuthStore;
   /** Confirmation shown before an interactive `add`. */
@@ -41,11 +41,11 @@ const MAIN = "main";
 const lastUsed = new Map<string, number>();
 const refreshes = new Map<string, Promise<PooledOAuthAccount>>();
 
-function storeFor(spec: PooledOAuthProviderSpec): PooledOAuthStore {
+function storeFor<TApi extends Api>(spec: PooledOAuthProviderSpec<TApi>): PooledOAuthStore {
   return spec.store ?? sharedOAuthPoolStore(spec.id);
 }
 
-function oauthFor(spec: PooledOAuthProviderSpec): OAuthAuth {
+function oauthFor<TApi extends Api>(spec: PooledOAuthProviderSpec<TApi>): OAuthAuth {
   const oauth = spec.createProvider().auth.oauth;
   if (!oauth) throw new Error(`${spec.label} does not expose subscription OAuth.`);
   return oauth;
@@ -67,7 +67,7 @@ async function notifyAuthEvent(ctx: AccountContext, event: any): Promise<void> {
   if (typeof event?.message === "string") ctx.ui.notify(event.message, "info");
 }
 
-async function authenticate(spec: PooledOAuthProviderSpec, ctx: AccountContext): Promise<OAuthCredential> {
+async function authenticate<TApi extends Api>(spec: PooledOAuthProviderSpec<TApi>, ctx: AccountContext): Promise<OAuthCredential> {
   const signal = ctx.signal ?? new AbortController().signal;
   return oauthFor(spec).login({
     signal,
@@ -87,16 +87,16 @@ async function authenticate(spec: PooledOAuthProviderSpec, ctx: AccountContext):
   });
 }
 
-function accountLabel(spec: PooledOAuthProviderSpec, account: PooledOAuthAccount): string {
+function accountLabel<TApi extends Api>(spec: PooledOAuthProviderSpec<TApi>, account: PooledOAuthAccount): string {
   return spec.describeAccount?.(account) ?? (account.label || account.identity || account.id.slice(0, 8));
 }
 
-function identityFor(spec: PooledOAuthProviderSpec, access: string): string | undefined {
+function identityFor<TApi extends Api>(spec: PooledOAuthProviderSpec<TApi>, access: string): string | undefined {
   return (spec.identityOf ?? oauthIdentity)(access);
 }
 
-function duplicateAccount(
-  spec: PooledOAuthProviderSpec,
+function duplicateAccount<TApi extends Api>(
+  spec: PooledOAuthProviderSpec<TApi>,
   credential: OAuthCredential,
   excludeId?: string,
 ): PooledOAuthAccount | undefined {
@@ -105,7 +105,7 @@ function duplicateAccount(
     account.id !== excludeId && (identity ? account.identity === identity : account.access === credential.access));
 }
 
-export function createPooledOAuthAdapter(spec: PooledOAuthProviderSpec): AccountProvider {
+export function createPooledOAuthAdapter<TApi extends Api>(spec: PooledOAuthProviderSpec<TApi>): AccountProvider {
   const store = () => storeFor(spec);
 
   return {
@@ -113,13 +113,19 @@ export function createPooledOAuthAdapter(spec: PooledOAuthProviderSpec): Account
     label: spec.label,
 
     async list(): Promise<ManagedAccount[]> {
-      return store().load().accounts.map((account) => ({
-        id: account.id,
-        label: accountLabel(spec, account),
-        enabled: account.enabled !== false,
-        expiresAt: account.expires,
-      }));
+      return store().load().accounts.map((account) => {
+        const identity = account.identity ?? identityFor(spec, account.access);
+        return {
+          id: account.id,
+          label: accountLabel(spec, account),
+          enabled: account.enabled !== false,
+          expiresAt: account.expires,
+          ...(identity && { identity }),
+        };
+      });
     },
+
+    identify: (accessToken) => identityFor(spec, accessToken),
 
     async add(ctx, label): Promise<string | undefined> {
       const prompt = spec.addPrompt ?? `Sign in with another ${spec.label} subscription?`;
@@ -186,8 +192,8 @@ export function createPooledOAuthAdapter(spec: PooledOAuthProviderSpec): Account
   };
 }
 
-export function chooseCredential(
-  spec: PooledOAuthProviderSpec,
+export function chooseCredential<TApi extends Api>(
+  spec: PooledOAuthProviderSpec<TApi>,
   primary: OAuthCredential,
 ): { id: string; credential: OAuthCredential; account?: PooledOAuthAccount } {
   const pool = storeFor(spec).load();
@@ -212,8 +218,8 @@ export function chooseCredential(
   return selectRoutingCandidate(candidates, pool.mode)?.value ?? { id: MAIN, credential: primary };
 }
 
-async function freshCredential(
-  spec: PooledOAuthProviderSpec,
+async function freshCredential<TApi extends Api>(
+  spec: PooledOAuthProviderSpec<TApi>,
   account: PooledOAuthAccount,
 ): Promise<PooledOAuthAccount> {
   if (account.expires > Date.now() + 60_000) return account;
@@ -233,8 +239,8 @@ async function freshCredential(
   return refresh;
 }
 
-async function routedAuth(
-  spec: PooledOAuthProviderSpec,
+async function routedAuth<TApi extends Api>(
+  spec: PooledOAuthProviderSpec<TApi>,
   oauth: OAuthAuth,
   primary: OAuthCredential,
 ): Promise<ModelAuth> {
@@ -249,7 +255,7 @@ async function routedAuth(
   return oauth.toAuth(credential);
 }
 
-export function registerPooledOAuthProvider(pi: ExtensionAPI, spec: PooledOAuthProviderSpec): void {
+export function registerPooledOAuthProvider<TApi extends Api>(pi: ExtensionAPI, spec: PooledOAuthProviderSpec<TApi>): void {
   const provider = spec.createProvider();
   const oauth = provider.auth.oauth;
   if (!oauth) return;
@@ -291,13 +297,13 @@ function requestAccessToken(options: any): string | undefined {
 }
 
 /** Resolves which pooled account served a request, falling back to the primary. */
-function accountIdForToken(spec: PooledOAuthProviderSpec, access: string | undefined): string {
+function accountIdForToken<TApi extends Api>(spec: PooledOAuthProviderSpec<TApi>, access: string | undefined): string {
   if (!access) return MAIN;
   return storeFor(spec).load().accounts.find((candidate) => candidate.access === access)?.id ?? MAIN;
 }
 
-function recordQuotaResponse(
-  spec: PooledOAuthProviderSpec,
+function recordQuotaResponse<TApi extends Api>(
+  spec: PooledOAuthProviderSpec<TApi>,
   access: string | undefined,
   status: number,
   headers: Record<string, string>,

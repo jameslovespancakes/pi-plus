@@ -149,6 +149,8 @@ export interface RefreshOptions {
   baseDelayMs?: number;
   fetchImpl?: typeof fetch;
   now?: () => number;
+  /** Bounds the entire refresh, including retries. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -172,6 +174,7 @@ export async function refreshToken(options: RefreshOptions): Promise<TokenSet> {
       const response = await doFetch(TOKEN_URL, {
         method: "POST",
         headers: TOKEN_HEADERS,
+        signal: options.signal,
         body: JSON.stringify({
           grant_type: "refresh_token",
           refresh_token: options.refreshToken,

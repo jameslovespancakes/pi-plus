@@ -26,15 +26,50 @@ export interface AccountRow {
   providerLabel: string;
   label: string;
   state: AccountState;
+  primary?: boolean;
   detail?: string;
 }
 
+export type PrimaryAccountResolver = (
+  provider: AccountProvider,
+) => ManagedAccount | undefined | Promise<ManagedAccount | undefined>;
+
+/** Adds pi's own credential to a provider's sidecar-managed accounts. */
+export async function providerAccounts(
+  provider: AccountProvider,
+  resolvePrimary?: PrimaryAccountResolver,
+): Promise<ManagedAccount[]> {
+  // Resolve serially so providers that discover identity through a profile
+  // endpoint do not burst the same endpoint for primary and sidecar accounts.
+  const primary = resolvePrimary
+    ? await Promise.resolve().then(() => resolvePrimary(provider)).catch(() => undefined)
+    : undefined;
+  const accounts = await provider.list();
+  const combined = !primary || accounts.some((account) => account.primary || account.id === primary.id)
+    ? accounts
+    : [primary, ...accounts];
+
+  const ids = new Set<string>();
+  const identities = new Set<string>();
+  return combined.filter((account) => {
+    if (ids.has(account.id)) return false;
+    ids.add(account.id);
+    if (!account.identity) return true;
+    if (identities.has(account.identity)) return false;
+    identities.add(account.identity);
+    return true;
+  });
+}
+
 /** Flattens provider accounts while loading providers in parallel. */
-export async function accountRows(providers: AccountProvider[]): Promise<AccountRow[]> {
+export async function accountRows(
+  providers: AccountProvider[],
+  resolvePrimary?: PrimaryAccountResolver,
+): Promise<AccountRow[]> {
   const groups = await Promise.all(providers.map(async (provider) => {
     let accounts: ManagedAccount[];
     try {
-      accounts = await provider.list();
+      accounts = await providerAccounts(provider, resolvePrimary);
     } catch {
       return [];
     }
@@ -44,7 +79,8 @@ export async function accountRows(providers: AccountProvider[]): Promise<Account
       providerLabel: provider.label,
       label: account.label,
       state: account.enabled ? "enabled" as const : "disabled" as const,
-      detail: account.primary ? "primary" : undefined,
+      primary: account.primary,
+      detail: account.primary ? "primary · managed by pi auth" : undefined,
     }));
   }));
   return groups.flat();
@@ -96,7 +132,7 @@ export async function openAccountsPicker(ctx: any, deps: AccountPickerDeps): Pro
     const items: any[] = rows.map((row) => ({
       id: row.id,
       label: labelFor(theme, row),
-      values: [...toggleValues],
+      values: row.primary ? [colourAccountState(theme, row.state)] : [...toggleValues],
       currentValue: colourAccountState(theme, row.state),
       description: row.detail,
     }));
@@ -128,6 +164,10 @@ export async function openAccountsPicker(ctx: any, deps: AccountPickerDeps): Pro
       const row = rows.find((r) => r.id === id);
       const item = items.find((i) => i.id === id);
       if (!row || !item) return;
+      if (row.primary) {
+        ctx.ui.notify("Primary accounts are managed by pi auth.", "info");
+        return;
+      }
       try {
         const next = deps.toggle(row.providerId, row.id.slice(row.providerId.length + 1));
         row.state = next;

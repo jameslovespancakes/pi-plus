@@ -1,5 +1,7 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { assertWorkflowBudgetAvailable } from "./budget.ts";
+import { isWorkflowPauseError } from "./cancellation.ts";
+import type { WorkflowAgentReservation } from "./agent-limits.ts";
 import {
   type AgentExecutionOptions,
   type AgentRunTags,
@@ -20,13 +22,13 @@ import {
 import { openAgentSession, promptAgentSession, type AgentSessionHandle } from "./agent-session.ts";
 import {
   createAgentWorkspace,
-  disposeAgentWorkspace,
   type AgentWorkspace,
 } from "./agent-workspace.ts";
 import type { AgentResumeBaseContext, AgentResumeContext, RepositoryResumeContext } from "./resume-context.ts";
 import { captureRepositoryMutationGuard } from "./resume-context.ts";
+import { unknownErrorMessage } from "./unknown-error.ts";
 
-/** Execute one fully bracketed workspace/session attempt. Cleanup always precedes settlement. */
+/** Execute one agent attempt. Sessions close immediately; worktrees settle at the workflow boundary. */
 export async function executeAgentAttempt(input: {
   readonly rc: RunContext;
   readonly prompt: string;
@@ -37,9 +39,9 @@ export async function executeAgentAttempt(input: {
   readonly label: string;
   readonly rowId: number;
   readonly tags: AgentRunTags;
-  readonly admitLiveAgent: () => void;
+  readonly reserveLiveAgent: () => WorkflowAgentReservation;
 }): Promise<AgentAttemptResult> {
-  const { rc, prompt, opts, resumeBaseContext, model, replay, label, rowId, tags, admitLiveAgent } = input;
+  const { rc, prompt, opts, resumeBaseContext, model, replay, label, rowId, tags, reserveLiveAgent } = input;
   let repositoryBefore: RepositoryResumeContext | undefined;
   let evidence: AgentReplayEvidence | undefined;
   if (isReplayEnabled(replay)) {
@@ -57,8 +59,17 @@ export async function executeAgentAttempt(input: {
   }
   let workspace: AgentWorkspace | undefined;
   let handle: AgentSessionHandle | undefined;
+  let admission: WorkflowAgentReservation | undefined;
+  let liveStarted = false;
 
   try {
+    // Calls with no replay path cannot become cache hits. Reserve their live
+    // slot before creating a disposable worktree or model session so a limit
+    // error cannot leave behind a fresh, untouched workspace.
+    if (!isReplayEnabled(replay)) {
+      assertWorkflowBudgetAvailable(rc.budget);
+      admission = reserveLiveAgent();
+    }
     workspace = await createAgentWorkspace(rc, opts, label);
     if (replay.kind === "isolated" && evidence?.kind === "isolated") {
       if (workspace.kind !== "isolated") throw new Error("Isolated replay created a shared workspace.");
@@ -104,8 +115,13 @@ export async function executeAgentAttempt(input: {
       }
     }
 
-    assertWorkflowBudgetAvailable(rc.budget);
-    admitLiveAgent();
+    if (!admission) {
+      assertWorkflowBudgetAvailable(rc.budget);
+      admission = reserveLiveAgent();
+    }
+    admission.commit();
+    liveStarted = true;
+    if (workspace.kind === "isolated") rc.worktrees.markRecoverable(workspace.cwd);
     const rawResult = await promptAgentSession({
       rc,
       handle,
@@ -136,12 +152,26 @@ export async function executeAgentAttempt(input: {
     }
     rc.progress.log(`${label}: read-only resume contract was not recorded (${validation.reason})`);
     return { kind: "live-unrecordable", result };
+  } catch (error) {
+    if (
+      workspace?.kind === "isolated"
+      && liveStarted
+      && !rc.signal?.aborted
+      && !isWorkflowPauseError(error)
+    ) {
+      rc.worktrees.preserve(workspace.cwd);
+      rc.progress.log(`${label}: retained failed worktree ${workspace.cwd}`);
+    }
+    throw error;
   } finally {
-    try {
-      const session = handle?.session;
-      if (session) rc.perf.timeSync("agent.dispose_ms", () => session.dispose(), tags);
-    } finally {
-      await disposeAgentWorkspace(rc, label, workspace);
+    admission?.release();
+    const session = handle?.session;
+    if (session) {
+      try {
+        rc.perf.timeSync("agent.dispose_ms", () => session.dispose(), tags);
+      } catch (error) {
+        rc.progress.log(`${label}: session cleanup failed (${unknownErrorMessage(error)})`);
+      }
     }
   }
 }

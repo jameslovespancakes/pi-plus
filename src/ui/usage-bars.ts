@@ -120,8 +120,7 @@ export function renderUsageLines(state: UsageState, theme: any, width: number, m
   const status = availability.ready
     ? `${availability.ready}/${availability.total} ready`
     : availability.unknown ? "unknown/stale" : "exhausted";
-  const partial = claude.some((cell) => cell.partial);
-  const claudeTitle = `Claude Σ${state.accounts} · ${status}${partial ? " · partial" : ""}`;
+  const claudeTitle = `Claude Σ${state.accounts} · ${status}`;
   const codexTitle = state.codexPlan ? `Codex · ${state.codexPlan}` : "Codex";
   const lines = [`  ${theme.fg("accent", claudeTitle.padEnd(cellWidth))}${" ".repeat(gap)}${theme.fg("accent", codexTitle)}`];
 

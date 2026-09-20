@@ -100,7 +100,9 @@ export function formatWorkflowRunDetails(
   now = Date.now(),
 ): string {
   const agents = record.progress.phases.flatMap((phase) =>
-    phase.agents.map((agent) => `${phase.title} / ${agent.label}: ${agent.status}`)
+    phase.agents.map((agent) =>
+      `${phase.title} / ${agent.label}: ${agent.status}${agent.error ? ` — ${agent.error}` : ""}`
+    )
   );
   const shownAgents = agents.slice(0, WORKFLOW_RUN_DETAIL_AGENT_LIMIT);
   const usage = formatWorkflowUsageLine(record.usage);

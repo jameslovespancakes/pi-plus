@@ -48,6 +48,9 @@ export interface Account {
   expires?: number;
   lastUsed?: number;
   lastRefreshedAt?: number;
+  lastRefreshError?: string;
+  /** Stable provider account UUID; survives OAuth token rotation. */
+  identity?: string;
   authLineageId?: string;
   quota?: QuotaSnapshot;
   apiKey?: string;
@@ -68,7 +71,7 @@ export interface Storage {
 const CONFIG_FIELDS = ["id", "label", "type", "enabled", "addedAt", "baseURL", "authHeader"] as const;
 /** Fields that belong in the state file. */
 const STATE_FIELDS = [
-  "authLineageId", "access", "refresh", "expires", "lastUsed",
+  "authLineageId", "identity", "access", "refresh", "expires", "lastUsed",
   "lastRefreshedAt", "lastRefreshError", "lastQuotaRefreshError", "quota", "profile", "prime", "apiKey",
 ] as const;
 

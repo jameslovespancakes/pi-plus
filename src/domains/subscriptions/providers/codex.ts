@@ -143,7 +143,7 @@ function markCodexRateLimited(accountId: string, headers: Record<string, string>
   if (account) saveCodexAccount({ ...account, blockedUntil });
 }
 
-export const CODEX_SPEC: PooledOAuthProviderSpec = {
+export const CODEX_SPEC: PooledOAuthProviderSpec<"openai-codex-responses"> = {
   id: "openai-codex",
   label: "Codex",
   createProvider: openaiCodexProvider,
