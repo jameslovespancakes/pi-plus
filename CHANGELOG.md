@@ -8,6 +8,8 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+## [1.0.14] - 2026-09-21
+
 ### Changed
 
 - Removed automatic remote-capacity and agent-board snapshot injection from
@@ -275,7 +277,8 @@ First published release.
   truncated to `claude` and named neither the window nor the model. They now
   show the model family, for example `Fable`.
 
-[Unreleased]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.13...HEAD
+[Unreleased]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.14...HEAD
+[1.0.14]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.13...v1.0.14
 [1.0.13]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.12...v1.0.13
 [1.0.12]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.11...v1.0.12
 [1.0.11]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.10...v1.0.11
