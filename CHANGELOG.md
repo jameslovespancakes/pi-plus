@@ -8,6 +8,27 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+### Changed
+
+- Removed automatic remote-capacity and agent-board snapshot injection from
+  ordinary turns. Remote capacity and board state are now fetched only through
+  their explicit tools, so neither feature delays or grows normal chat context.
+
+### Removed
+
+- Removed Better Compact, its recall tool, and its parallel context-management
+  configuration. Pi once again owns compaction, context thresholds, transcript
+  handling, and token accounting without extension-side intervention.
+
+### Fixed
+
+- Temporary Codex access-verification failures now identify the model that was
+  actually selected, explicitly state that no alternate model was requested,
+  and are classified as retryable when a workflow opts into agent retries.
+- Aligned the local Pi peer packages with the host's 0.86.1 compatibility
+  metadata so provider wrapping preserves mid-conversation system messages and
+  Codex requests retain their declared tools.
+
 ## [1.0.13] - 2026-09-20
 
 ### Added

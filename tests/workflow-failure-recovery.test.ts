@@ -9,6 +9,10 @@ import {
   WorkflowAgentLimiter,
 } from "../src/domains/workflows/runtime/agent-limits.ts";
 import { combinedAgentAttemptError } from "../src/domains/workflows/runtime/agent-failure.ts";
+import {
+  providerErrorFromMessages,
+  WorkflowProviderError,
+} from "../src/domains/workflows/runtime/agent-retry.ts";
 import { WorktreeRegistry } from "../src/domains/workflows/runtime/worktree.ts";
 
 function git(cwd: string, ...args: string[]): string {
@@ -55,6 +59,23 @@ test("failed workflow worktrees keep edits while untouched worktrees are cleaned
     await worktrees.removeAll().catch(() => undefined);
     rmSync(repository, { recursive: true, force: true });
   }
+});
+
+test("Codex access-verification glitches identify the selected model and are retryable", () => {
+  const error = providerErrorFromMessages([{
+    role: "assistant",
+    stopReason: "error",
+    provider: "openai-codex",
+    model: "gpt-5.6-sol",
+    api: "openai-codex-responses",
+    errorMessage: '{"detail":"Unable to verify Daybreak Blue access. Please try again."}',
+  }]);
+
+  assert.ok(error instanceof WorkflowProviderError);
+  assert.equal(error.retryable, true);
+  assert.match(error.message, /selected model openai-codex\/gpt-5\.6-sol/);
+  assert.match(error.message, /No alternate model was requested/);
+  assert.match(error.message, /Daybreak Blue/);
 });
 
 test("retry failure reports both the earlier provider error and final agent limit", () => {

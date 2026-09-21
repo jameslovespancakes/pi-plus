@@ -37,7 +37,6 @@
       "./src/domains/setup/index.ts",
       "./src/domains/subscriptions/index.ts",
       "./src/domains/models/index.ts",
-      "./src/domains/compact/index.ts",
       "./src/domains/workflows/index.ts",
       "./src/domains/agents/index.ts",
       "./src/domains/remote/index.ts"
@@ -50,10 +49,10 @@
     "ws": "^8.18.3"
   },
   "peerDependencies": {
-    "@earendil-works/pi-agent-core": "*",
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
+    "@earendil-works/pi-agent-core": "^0.86.1",
+    "@earendil-works/pi-ai": "^0.86.1",
+    "@earendil-works/pi-coding-agent": "^0.86.1",
+    "@earendil-works/pi-tui": "^0.86.1",
     "typebox": "*"
   },
   "scripts": {

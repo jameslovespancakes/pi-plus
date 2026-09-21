@@ -145,7 +145,7 @@ test("a missing config is created from defaults", async () => {
     const written = JSON.parse(readFileSync(join(dir, "pi-plus.json"), "utf8"));
     assert.deepEqual(written.policy, loaded);
     assert.equal("meteredBudgetUsd" in written.policy, false);
-    assert.deepEqual(Object.keys(written).sort(), ["compact", "env", "policy", "remote"]);
+    assert.deepEqual(Object.keys(written).sort(), ["env", "policy", "remote"]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

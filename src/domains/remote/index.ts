@@ -31,7 +31,6 @@ interface Limits {
 	gpuMemoryBlockPercent: number;
 	memoryBlockPercent: number;
 	minimumFreeDiskGB: number;
-	statusCacheSeconds: number;
 	retentionHours: number;
 }
 
@@ -58,7 +57,6 @@ interface Worker extends Omit<WorkerInput, keyof Limits | "enabled">, Limits {
 }
 
 interface Config {
-	injectStatus: boolean;
 	workers: Worker[];
 }
 
@@ -100,7 +98,6 @@ const DEFAULT_LIMITS: Limits = {
 	gpuMemoryBlockPercent: 90,
 	memoryBlockPercent: 90,
 	minimumFreeDiskGB: 10,
-	statusCacheSeconds: 30,
 	retentionHours: 24,
 };
 
@@ -116,8 +113,6 @@ const HARD_WALK_EXCLUDES = new Set([
 	".next",
 	"remote_tests",
 ]);
-
-let statusCache: { expiresAt: number; key: string; statuses: WorkerStatus[] } | undefined;
 
 function finiteNumber(value: unknown, fallback: number, min: number, max: number): number {
 	return typeof value === "number" && Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
@@ -139,7 +134,6 @@ async function loadConfig(): Promise<Config> {
 		),
 		memoryBlockPercent: finiteNumber(defaults.memoryBlockPercent, DEFAULT_LIMITS.memoryBlockPercent, 1, 100),
 		minimumFreeDiskGB: finiteNumber(defaults.minimumFreeDiskGB, DEFAULT_LIMITS.minimumFreeDiskGB, 0, 100000),
-		statusCacheSeconds: finiteNumber(defaults.statusCacheSeconds, DEFAULT_LIMITS.statusCacheSeconds, 1, 600),
 		retentionHours: finiteNumber(defaults.retentionHours, DEFAULT_LIMITS.retentionHours, 1, 24 * 365),
 	};
 	const names = new Set<string>();
@@ -172,11 +166,10 @@ async function loadConfig(): Promise<Config> {
 			),
 			memoryBlockPercent: finiteNumber(raw.memoryBlockPercent, defaultLimits.memoryBlockPercent, 1, 100),
 			minimumFreeDiskGB: finiteNumber(raw.minimumFreeDiskGB, defaultLimits.minimumFreeDiskGB, 0, 100000),
-			statusCacheSeconds: finiteNumber(raw.statusCacheSeconds, defaultLimits.statusCacheSeconds, 1, 600),
 			retentionHours: finiteNumber(raw.retentionHours, defaultLimits.retentionHours, 1, 24 * 365),
 		};
 	});
-	return { injectStatus: parsed.injectStatus !== false, workers };
+	return { workers };
 }
 
 /** `-i`/`-p` only when the worker was added without an ~/.ssh/config entry. */
@@ -331,25 +324,13 @@ async function probeWorker(worker: Worker): Promise<WorkerStatus> {
 	}
 }
 
-async function probeWorkers(config: Config, force = false): Promise<WorkerStatus[]> {
+async function probeWorkers(config: Config): Promise<WorkerStatus[]> {
 	const active = config.workers.filter((worker) => worker.enabled);
-	if (active.length === 0) return [];
-	const key = JSON.stringify(active.map((worker) => [worker.name, worker.ssh, worker.root]));
-	const ttlSeconds = Math.min(...active.map((worker) => worker.statusCacheSeconds));
-	if (!force && statusCache && statusCache.key === key && statusCache.expiresAt > Date.now()) return statusCache.statuses;
-	const statuses = await Promise.all(active.map(probeWorker));
-	statusCache = { key, statuses, expiresAt: Date.now() + ttlSeconds * 1000 };
-	return statuses;
+	return Promise.all(active.map(probeWorker));
 }
 
 function metric(value: number | undefined): string {
 	return value === undefined ? "?" : `${Math.round(value)}%`;
-}
-
-function compactStatus(status: WorkerStatus): string {
-	const gpu = status.gpuPercent === undefined ? "GPU ?" : `GPU ${metric(status.gpuPercent)}`;
-	const reason = status.reasons.length ? ` (${status.reasons.join(", ")})` : "";
-	return `${status.name} ${status.state.toUpperCase()} CPU ${metric(status.cpuPercent)} MEM ${metric(status.memoryPercent)} ${gpu} active-jobs ${status.jobs ?? "?"}${reason}`;
 }
 
 function detailedStatuses(statuses: WorkerStatus[]): string {
@@ -696,7 +677,6 @@ export default function remoteJobsExtension(pi: ExtensionAPI) {
 			const selected = params.host ? enabled.filter((worker) => worker.name === params.host) : enabled;
 			if (params.host && selected.length === 0) throw new Error(`Unknown remote worker: ${params.host}`);
 			const statuses = await Promise.all(selected.map(probeWorker));
-			statusCache = undefined;
 			return {
 				content: [{ type: "text", text: detailedStatuses(statuses) }],
 				details: { statuses },
@@ -745,7 +725,7 @@ export default function remoteJobsExtension(pi: ExtensionAPI) {
 			if (requestedHost !== "auto" && !enabledWorkers.some((worker) => worker.name === requestedHost)) {
 				throw new Error(`Unknown remote worker: ${requestedHost}. Available: ${enabledWorkers.map((w) => w.name).join(", ")}`);
 			}
-			let statuses = await probeWorkers(config, true);
+			const statuses = await probeWorkers(config);
 			let worker = pickWorker(config, statuses, requestedHost, params.requiresGpu ?? false);
 			if (!worker) return blockedResult(undefined, undefined, detailedStatuses(statuses));
 			let workerStatus = statuses.find((status) => status.name === worker!.name);
@@ -818,7 +798,6 @@ export default function remoteJobsExtension(pi: ExtensionAPI) {
 					text += `\n\n[Output truncated; full log: ${remoteJob}/test.log]`;
 				}
 				void runSsh(worker, "bash -s", { input: cleanupScript(worker, snapshot.repoName), timeoutSeconds: 15 }).catch(() => {});
-				statusCache = undefined;
 				return {
 					content: [{ type: "text", text }],
 					details: {
@@ -847,20 +826,4 @@ export default function remoteJobsExtension(pi: ExtensionAPI) {
 		},
 	});
 
-	pi.on("before_agent_start", async (event) => {
-		try {
-			const config = await loadConfig();
-			if (!config.injectStatus) return;
-			const statuses = await probeWorkers(config);
-			if (statuses.length === 0) return;
-			const line = statuses.map(compactStatus).join("; ");
-			return {
-				systemPrompt:
-					event.systemPrompt +
-					`\n\nRemote worker capacity (recent sample): ${line}. remote_test always performs a fresh hard admission check. Never retry a BLOCKED worker immediately; choose another READY worker or run locally.`,
-			};
-		} catch {
-			return;
-		}
-	});
 }

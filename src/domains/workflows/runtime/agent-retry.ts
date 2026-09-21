@@ -8,6 +8,7 @@ import {
 export const AGENT_RETRY_BASE_DELAY_MS = 1_000;
 export const AGENT_RETRY_MAX_DELAY_MS = 30_000;
 export const WORKFLOW_PROVIDER_ERROR_CODE = "WORKFLOW_PROVIDER_ERROR";
+const CODEX_ACCESS_VERIFICATION_ERROR = /Unable to verify\s+[^.\r\n]{1,120}\s+access\.\s*Please try again\.?/i;
 
 export interface AgentRetryScheduler {
   sleep(delayMs: number, signal: AbortSignal | undefined): Promise<void>;
@@ -25,12 +26,11 @@ export interface ProviderErrorDetails {
 export class WorkflowProviderError extends Error {
   override readonly name = "WorkflowProviderError";
   readonly code = WORKFLOW_PROVIDER_ERROR_CODE;
+  readonly details: ProviderErrorDetails;
 
-  constructor(
-    message: string,
-    readonly details: ProviderErrorDetails,
-  ) {
+  constructor(message: string, details: ProviderErrorDetails) {
     super(message);
+    this.details = details;
   }
 
   get retryable(): boolean {
@@ -79,13 +79,18 @@ export function providerErrorFromMessages(
   if (usageLimit && options.pauseOnUsageLimit) return usageLimit;
   const message = messages.findLast(isAssistantMessage);
   if (!message || message.stopReason !== "error") return undefined;
-  const errorMessage = typeof message.errorMessage === "string" && message.errorMessage.length > 0
+  const providerMessage = typeof message.errorMessage === "string" && message.errorMessage.length > 0
     ? message.errorMessage
     : "Provider session ended with an unspecified error.";
-  const retryable = isRetryableAssistantError(message as AssistantMessage);
   const provider = stringDetail(message.provider);
   const model = stringDetail(message.model);
   const api = stringDetail(message.api);
+  const codexAccessVerification = provider === "openai-codex"
+    && CODEX_ACCESS_VERIFICATION_ERROR.test(providerMessage);
+  const retryable = isRetryableAssistantError(message as AssistantMessage) || codexAccessVerification;
+  const errorMessage = codexAccessVerification && model
+    ? `Codex temporarily could not verify access for the selected model ${provider}/${model}. No alternate model was requested. Provider response: ${providerMessage}`
+    : providerMessage;
   return new WorkflowProviderError(errorMessage, {
     stopReason: "error",
     retryable,

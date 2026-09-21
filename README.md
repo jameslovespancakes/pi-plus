@@ -129,7 +129,9 @@ the one line to run, and verifies.
 `remote_test` snapshots your working tree, admission-checks CPU/GPU/disk,
 reserves a slot, and **deletes the uploaded source the moment the run ends**,
 keeping only `test.log` and `result.json`. Cleanup runs on the worker, so it
-still happens if your laptop sleeps.
+still happens if your laptop sleeps. Worker capacity is queried only by
+`remote_status` or `remote_test`; Pi Plus never injects SSH status into ordinary
+chat turns.
 
 ### Coordinate multiple agents
 
@@ -152,26 +154,9 @@ across every running pi agent. `/board` opens the messaging view:
 
 `/board setup` installs the server locally (pi starts it each session) or onto
 any Mac or Linux host over SSH, where launchd or systemd brings it back after a
-reboot.
-
-### Compact without deleting the source
-
-Better Compact replaces Pi's normal compaction with a reversible local archive,
-deterministic protection and extractive compression. Jev mode adds six-signal
-routing through OpenRouter's decisions API; Jev ranks compression but cannot
-override protected facts or authorize source deletion.
-
-```
-/compact better on    # switch to local deterministic routing and compact now
-/compact better jev   # switch to Jev routing and compact now
-/compact better off   # restore Pi compaction and compact now
-```
-
-The selected mode persists for later manual and automatic compactions. Jev mode
-requires `OPENROUTER_API_KEY` (or OpenRouter auth configured in Pi). Original
-chunks stay under `~/.pi/agent/super-context/archives/`; the
-`super_context_recall` tool performs bounded retrieval from the current branch's
-checkpoint.
+reboot. Board state is returned only when `agent_board` is called or a real
+board message is delivered; background presence snapshots are not added to
+model context.
 
 ### Orchestrate repeatable workflows
 
@@ -213,12 +198,11 @@ with workflow options when a task needs them.
 | `/remote add \| rename \| remove` | jump to one step |
 | `/board` | live agent board UI |
 | `/board setup \| restart \| clear \| status` | manage the board server |
-| `/compact better on \| off \| jev` | select reversible compaction and compact now |
 | `/workflow` | open the running workflow agent board |
 | `/workflow <name> [args]` | run a bundled workflow |
 
 **Tools available to the agent:** `workflow`, `list_models`, `agent_board`,
-`remote_status`, `remote_test`, `super_context_recall`.
+`remote_status`, `remote_test`.
 
 ---
 
@@ -230,8 +214,7 @@ Everything lives in one file, `~/.pi/agent/pi-plus.json`, created on first use:
 {
   "env":    { "ARTIFICIAL_ANALYSIS_API_KEY": "aa_…", "AGENT_BOARD_URL": "ws://…" },
   "policy": { "autoApprove": [], "requireApproval": [], "deny": [] },
-  "remote": { "workers": [] },
-  "compact": { "better": "off" }
+  "remote": { "workers": [] }
 }
 ```
 

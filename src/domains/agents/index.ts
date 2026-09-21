@@ -11,11 +11,10 @@ import { Type } from "typebox";
 import WebSocket from "ws";
 import { env } from "../../core/env.ts";
 import { handleBoardAdmin, registerBoardLifecycle } from "./board-setup.ts";
-import { formatBoardDeliveries, formatBoardSnapshot, type BoardDelivery } from "./format.ts";
+import { formatBoardDeliveries, type BoardDelivery } from "./format.ts";
 
 const HEARTBEAT_MS = 8_000;
 const REQUEST_TIMEOUT_MS = 2_000;
-const SNAPSHOT_CACHE_MS = 1_500;
 const MESSAGE_MAX = 8_000;
 const DELIVERY_DEBOUNCE_MS = 250;
 const DELIVERY_BATCH_MAX = 8;
@@ -304,8 +303,6 @@ export default function (pi: ExtensionAPI) {
   let ctx: ExtensionContext | undefined;
   let self: AgentInfo | undefined;
   let gitInfo: GitInfo = {};
-  let snapshot: { at: number; agents: AgentInfo[] } = { at: 0, agents: [] };
-  let lastInjectedSnapshot: string | undefined;
   let pendingDeliveries: BoardDelivery[] = [];
   let deliveryTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -320,12 +317,6 @@ export default function (pi: ExtensionAPI) {
     gitInfo = readGit(ctx.cwd);
     self = { ...self, ...gitInfo };
     client.presence(gitInfo);
-  };
-  const snapshotAgents = async (): Promise<AgentInfo[]> => {
-    if (Date.now() - snapshot.at > SNAPSHOT_CACHE_MS) {
-      snapshot = { at: Date.now(), agents: await client.request("agents", {}, 500) };
-    }
-    return snapshot.agents;
   };
   const flushDeliveries = () => {
     if (deliveryTimer) clearTimeout(deliveryTimer);
@@ -354,7 +345,6 @@ export default function (pi: ExtensionAPI) {
 
   client.on((event) => {
     if (event.t === "connection") {
-      if (event.connected) { snapshot.at = 0; lastInjectedSnapshot = undefined; }
       updateStatus();
       return;
     }
@@ -374,19 +364,9 @@ export default function (pi: ExtensionAPI) {
   });
   pi.on("session_info_changed", async (event) => { if (self) { self.alias = event.name; client.presence({ alias: event.name }); } });
   pi.on("model_select", async (event) => client.presence({ model: `${event.model.provider}/${event.model.id}` }));
-  pi.on("before_agent_start", async (event) => {
+  pi.on("before_agent_start", (event) => {
     client.presence({ state: "thinking", lastPrompt: cleanLine(event.prompt) });
     client.activity("prompt", event.prompt);
-    if (!client.connected) return;
-    try {
-      const content = formatBoardSnapshot(await snapshotAgents(), gitInfo, client.coordination);
-      if (content === lastInjectedSnapshot) return;
-      lastInjectedSnapshot = content;
-      // Persist one compact snapshot at a user-turn boundary. A transient message
-      // appended in `context` becomes Anthropic's final cache breakpoint but is
-      // absent from the next transcript, forcing a conversation-cache miss.
-      return { message: { customType: "agent-board-snapshot", content, display: false, details: {} } };
-    } catch { return; }
   });
   pi.on("tool_execution_start", async (event) => {
     const lastTool = cleanLine(`${event.toolName}: ${JSON.stringify(event.args)}`, 100);
@@ -394,8 +374,6 @@ export default function (pi: ExtensionAPI) {
   });
   pi.on("tool_execution_end", async () => client.presence({ state: "thinking" }));
   pi.on("agent_settled", async () => { client.presence({ state: "idle", lastTool: undefined }); refreshGit(); });
-  pi.on("session_compact", async () => { lastInjectedSnapshot = undefined; });
-  pi.on("session_tree", async () => { lastInjectedSnapshot = undefined; });
   pi.on("session_shutdown", async (_event, eventCtx) => {
     if (deliveryTimer) clearTimeout(deliveryTimer);
     deliveryTimer = undefined; pendingDeliveries = [];

@@ -20,7 +20,6 @@ export interface RemoteWorkerRecord {
 }
 
 export interface RemoteSettings {
-  injectStatus: boolean;
   defaults: Record<string, unknown>;
   workers: RemoteWorkerRecord[];
 }
@@ -28,7 +27,6 @@ export interface RemoteSettings {
 export function readRemote(): RemoteSettings {
   const section = readConfig().remote;
   return {
-    injectStatus: section.injectStatus !== false,
     defaults: (section.defaults as Record<string, unknown>) ?? {},
     workers: (section.workers as RemoteWorkerRecord[]) ?? [],
   };

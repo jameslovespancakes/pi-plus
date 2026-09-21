@@ -33,10 +33,10 @@ test("a fresh install writes every config section", async () => {
   const { module, read, cleanup } = await setup();
   try {
     const config = module.readConfig();
-    assert.deepEqual(Object.keys(config).sort(), ["compact", "env", "policy", "remote"]);
+    assert.deepEqual(Object.keys(config).sort(), ["env", "policy", "remote"]);
     assert.deepEqual(read().policy.requireApproval, config.policy.requireApproval);
     assert.deepEqual(config.remote.workers, []);
-    assert.equal(config.compact.better, "off");
+    assert.equal("injectStatus" in config.remote, false);
   } finally {
     cleanup();
   }
@@ -78,7 +78,8 @@ test("every legacy file folds into the right section", async () => {
     assert.equal(config.env.AGENT_BOARD_NAME, "james");
     assert.deepEqual(config.policy.deny, ["xai/*"]);
     assert.equal(config.remote.workers[0].name, "linux-box");
-    assert.equal(config.remote.injectStatus, false);
+    assert.equal("injectStatus" in config.remote, false);
+    assert.equal("injectStatus" in read().remote, false);
     assert.equal(read().env.AGENT_BOARD_TOKEN, "tok", "migration is persisted, not just in memory");
   } finally {
     cleanup();

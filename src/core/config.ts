@@ -15,22 +15,14 @@ export interface PolicySection {
 }
 
 export interface RemoteSection {
-  injectStatus?: boolean;
   defaults?: Record<string, unknown>;
   workers: Record<string, unknown>[];
-}
-
-export type BetterCompactMode = "off" | "on" | "jev";
-
-export interface CompactSection {
-  better: BetterCompactMode;
 }
 
 export interface PiPlusConfig {
   env: Record<string, string>;
   policy: PolicySection;
   remote: RemoteSection;
-  compact: CompactSection;
 }
 
 const DEFAULTS: PiPlusConfig = {
@@ -40,8 +32,7 @@ const DEFAULTS: PiPlusConfig = {
     requireApproval: ["openrouter/*", "google/*", "openai/*"],
     deny: [],
   },
-  remote: { injectStatus: true, workers: [] },
-  compact: { better: "off" },
+  remote: { workers: [] },
 };
 
 /** Legacy file -> section, applied only when that section is still absent. */
@@ -90,7 +81,7 @@ const MIGRATIONS: { file: string; apply: (raw: any, into: PiPlusConfig) => boole
     file: "remote.json",
     apply: (raw, into) => {
       if (into.remote.workers.length > 0 || !Array.isArray(raw?.workers)) return false;
-      into.remote = { injectStatus: raw.injectStatus !== false, defaults: raw.defaults, workers: raw.workers };
+      into.remote = { defaults: raw.defaults, workers: raw.workers };
       return true;
     },
   },
@@ -98,7 +89,7 @@ const MIGRATIONS: { file: string; apply: (raw: any, into: PiPlusConfig) => boole
     file: "remote-workers.json",
     apply: (raw, into) => {
       if (into.remote.workers.length > 0 || !Array.isArray(raw?.workers)) return false;
-      into.remote = { injectStatus: raw.injectStatus !== false, defaults: raw.defaults, workers: raw.workers };
+      into.remote = { defaults: raw.defaults, workers: raw.workers };
       return true;
     },
   },
@@ -111,7 +102,6 @@ export function configPath(): string {
 }
 
 function normalize(raw: Partial<PiPlusConfig> | undefined): PiPlusConfig {
-  const better = raw?.compact?.better;
   return {
     env: raw?.env && typeof raw.env === "object" ? { ...raw.env } : {},
     policy: {
@@ -122,12 +112,8 @@ function normalize(raw: Partial<PiPlusConfig> | undefined): PiPlusConfig {
       deny: Array.isArray(raw?.policy?.deny) ? raw.policy.deny : [],
     },
     remote: {
-      injectStatus: raw?.remote?.injectStatus !== false,
       defaults: raw?.remote?.defaults,
       workers: Array.isArray(raw?.remote?.workers) ? raw.remote.workers : [],
-    },
-    compact: {
-      better: better === "on" || better === "jev" ? better : "off",
     },
   };
 }
@@ -137,16 +123,16 @@ export function readConfig(): PiPlusConfig {
 
   const path = configPath();
   const exists = existsSync(path);
-  const config = normalize(exists ? readJson<Partial<PiPlusConfig>>(path, {}) : undefined);
+  const raw = exists ? readJson<Partial<PiPlusConfig>>(path, {}) : undefined;
+  const config = normalize(raw);
 
-  // Only consider legacy sources when the unified file is absent or partial.
   let migrated = false;
   for (const migration of MIGRATIONS) {
     const legacyPath = agentPath(migration.file);
     if (!existsSync(legacyPath)) continue;
-    const raw = readJson<any>(legacyPath, undefined);
-    if (raw === undefined) continue;
-    if (migration.apply(raw, config)) migrated = true;
+    const legacy = readJson<any>(legacyPath, undefined);
+    if (legacy === undefined) continue;
+    if (migration.apply(legacy, config)) migrated = true;
   }
 
   if (!exists || migrated) writeJson(path, config, true);
