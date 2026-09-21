@@ -8,6 +8,8 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+## [1.0.15] - 2026-09-21
+
 ### Changed
 
 - Require pi 0.87.0 or newer for compatible provider module resolution.
@@ -281,7 +283,8 @@ First published release.
   truncated to `claude` and named neither the window nor the model. They now
   show the model family, for example `Fable`.
 
-[Unreleased]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.14...HEAD
+[Unreleased]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.15...HEAD
+[1.0.15]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.14...v1.0.15
 [1.0.14]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.13...v1.0.14
 [1.0.13]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.12...v1.0.13
 [1.0.12]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.11...v1.0.12
