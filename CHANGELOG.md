@@ -8,6 +8,10 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+### Changed
+
+- Require pi 0.87.0 or newer for compatible provider module resolution.
+
 ## [1.0.14] - 2026-09-21
 
 ### Changed

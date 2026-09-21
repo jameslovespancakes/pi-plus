@@ -17,6 +17,8 @@
 
 ## Install
 
+Requires **pi 0.87.0 or newer**.
+
 ```sh
 pi install npm:@jameslovespancakes/pi-plus           # npm
 pi install git:github.com/jameslovespancakes/pi-plus # git
