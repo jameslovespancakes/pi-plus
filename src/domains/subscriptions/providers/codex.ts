@@ -1,5 +1,4 @@
 import type { OAuthCredential } from "@earendil-works/pi-ai";
-import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { RoutingMode } from "../../../core/accounts/registry.ts";
 import { normalizeRoutingMode, type AccountQuotaState } from "../../../core/accounts/routing.ts";
@@ -13,6 +12,7 @@ import {
   saveCodexAccounts,
   type CodexAccount,
 } from "../../../core/codex/store.ts";
+import { builtinProvider } from "./builtin.ts";
 import {
   chooseCredential,
   createPooledOAuthAdapter,
@@ -146,7 +146,7 @@ function markCodexRateLimited(accountId: string, headers: Record<string, string>
 export const CODEX_SPEC: PooledOAuthProviderSpec<"openai-codex-responses"> = {
   id: "openai-codex",
   label: "Codex",
-  createProvider: openaiCodexProvider,
+  createProvider: () => builtinProvider("openai-codex"),
   store: CODEX_STORE,
   addPrompt: "Sign in with a DIFFERENT ChatGPT account in the browser. Continue?",
   describeAccount: (account) => describePlan(account as PooledOAuthAccount & CodexAccount),

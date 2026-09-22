@@ -1,40 +1,39 @@
-import type {
-  Api,
-  AssistantMessage,
-  AssistantMessageEventStream,
-  Model,
-  ModelThinkingLevel,
-  ProviderStreams,
-  SimpleStreamOptions,
-  StopReason,
-  StreamOptions,
-  TextContent,
-  ThinkingContent,
-  ToolCall,
-  ToolChoice,
-  TranscriptContext,
+// Only pi-ai's package root: it is one of the entry points pi supplies to
+// extensions from its own copy. Deep imports have nothing to resolve against
+// on a clean install (see convert.ts).
+import {
+  calculateCost,
+  clampThinkingLevel,
+  createAssistantMessageEventStream,
+  formatThrownValue,
+  type Api,
+  type AssistantMessage,
+  type AssistantMessageEventStream,
+  type Model,
+  type ModelThinkingLevel,
+  type ProviderStreams,
+  type SimpleStreamOptions,
+  type StopReason,
+  type StreamOptions,
+  type TextContent,
+  type ThinkingContent,
+  type ToolCall,
+  type ToolChoice,
+  type TranscriptContext,
 } from "@earendil-works/pi-ai";
-import { calculateCost, clampThinkingLevel } from "@earendil-works/pi-ai";
-import { buildBaseOptions } from "@earendil-works/pi-ai/api/simple-options";
-import { formatProviderError, normalizeProviderError } from "@earendil-works/pi-ai/utils/error-body";
-// pi exports the concrete stream class from this subpath; the bare name on the
-// package root is the interface, which cannot be constructed.
-import { createAssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
-import { headersToRecord, providerHeadersToRecord } from "@earendil-works/pi-ai/utils/headers";
-import { retryProviderRequest } from "@earendil-works/pi-ai/utils/provider-retry";
 import { geminiHeaders, endpointsFor } from "./client.ts";
+import type { Part } from "./convert.ts";
 import { decodeApiKey } from "./credentials.ts";
 import { GEMINI_API, runtimeModelId } from "./models.ts";
-import { buildRequest, googleShared, type Part } from "./request.ts";
+import { buildRequest } from "./request.ts";
 
 /**
  * Gemini streaming transport.
  *
  * The request is Gemini inside an agent envelope, posted to
  * `v1internal:streamGenerateContent`, and every SSE frame comes back wrapped
- * in `.response`. Retry policy, error formatting, stop-reason mapping and
- * thought-signature retention are pi's; what is here is what this backend
- * needs beyond them — endpoint fallback, reading quota walls out of the
+ * in `.response`. Retrying is pi's: its session retries on the wording
+ * below. What is here is what this backend needs beyond that — endpoint fallback, reading quota walls out of the
  * response body, and a watchdog for streams that go silent.
  */
 
@@ -170,18 +169,38 @@ export function describeFailure(status: number, body: string, runtimeId: string)
 }
 
 /**
- * Response headers plus what the body said about retrying, in the form pi's
- * `retryProviderRequest` and the account pool both read.
+ * Response headers plus the retry delay the body stated, in the form the
+ * account pool reads when it decides how long to hold an account back.
  */
 function failureHeaders(headers: Headers, failure: Failure): Headers {
   const next = new Headers(headers);
-  // A quota wall will not clear within any retry backoff; spend nothing on it.
-  if (failure.quotaWall) next.set("x-should-retry", "false");
   if (failure.retryAfterSeconds !== undefined && !next.has("retry-after")) {
     next.set("retry-after", String(failure.retryAfterSeconds));
   }
   return next;
 }
+
+function toRecord(headers: Headers): Record<string, string> {
+  const record: Record<string, string> = {};
+  headers.forEach((value, name) => { record[name] = value; });
+  return record;
+}
+
+/** pi's header rule: later layers win, and a null value removes the header. */
+function mergeHeaders(...layers: Array<Record<string, string | null | undefined> | undefined>): Record<string, string> {
+  const merged: Record<string, string | null | undefined> = {};
+  for (const layer of layers) Object.assign(merged, layer);
+  return Object.fromEntries(Object.entries(merged).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+}
+
+/** "STOP" and "MAX_TOKENS" are successes; every other finish reason is a failure, as in pi. */
+function stopReasonOf(finishReason: string): StopReason {
+  return finishReason === "STOP" ? "stop" : finishReason === "MAX_TOKENS" ? "length" : "error";
+}
+
+/** Some backends send a signature only on a block's first delta; keep it. */
+const retainSignature = (existing: string | undefined, incoming: string | undefined) =>
+  typeof incoming === "string" && incoming.length > 0 ? incoming : existing;
 
 // --- Transport -------------------------------------------------------------
 
@@ -274,17 +293,12 @@ export const stream = (
     try {
       const { token, projectId } = decodeApiKey(options?.apiKey);
       const runtimeId = runtimeModelId(model, options?.reasoning);
-      const google = await googleShared();
 
-      let body: unknown = await buildRequest(model, context, projectId, options);
+      let body: unknown = buildRequest(model, context, projectId, options);
       body = (await options?.onPayload?.(body, model)) ?? body;
       const payload = JSON.stringify(body);
 
-      const headers: Record<string, string> = {
-        ...geminiHeaders(token),
-        // Same precedence and null-suppression rules as pi's own adapters.
-        ...providerHeadersToRecord({ ...model.headers, ...options?.headers }),
-      };
+      const headers = mergeHeaders(geminiHeaders(token), model.headers, options?.headers);
       const fetchImpl = options?.fetch ?? globalThis.fetch;
       const headerTimeout = options?.timeoutMs ?? HEADER_TIMEOUT_MS;
       const idleTimeout = options?.timeoutMs ?? STALL_TIMEOUT_MS;
@@ -307,7 +321,7 @@ export const stream = (
             headerTimeout,
           );
           if (response.ok) {
-            await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
+            await options?.onResponse?.({ status: response.status, headers: toRecord(response.headers) }, model);
             return response;
           }
           const failure = describeFailure(response.status, await response.text(), runtimeId);
@@ -318,7 +332,7 @@ export const stream = (
         const { status, headers: reported, failure } = failed!;
         // Reported with the body's reset time, so the account pool can hold a
         // quota-walled account out of routing until it actually resets.
-        await options?.onResponse?.({ status, headers: headersToRecord(reported) }, model);
+        await options?.onResponse?.({ status, headers: toRecord(reported) }, model);
         // The shape pi's retry policy reads: `status` plus `Headers`.
         throw Object.assign(new Error(failure.message), { status, headers: reported });
       };
@@ -360,7 +374,7 @@ export const stream = (
           for (const part of candidate?.content?.parts ?? []) {
             if (part.text !== undefined) {
               received = true;
-              const thinking = google.isThinkingPart(part);
+              const thinking = part.thought === true;
               if (!block || (thinking ? block.type !== "thinking" : block.type !== "text")) {
                 closeBlock(block);
                 block = thinking
@@ -373,11 +387,11 @@ export const stream = (
 
               if (block.type === "thinking") {
                 block.thinking += part.text;
-                block.thinkingSignature = google.retainThoughtSignature(block.thinkingSignature, part.thoughtSignature);
+                block.thinkingSignature = retainSignature(block.thinkingSignature, part.thoughtSignature);
                 events.push({ type: "thinking_delta", contentIndex: index(), delta: part.text, partial: output });
               } else {
                 block.text += part.text;
-                block.textSignature = google.retainThoughtSignature(block.textSignature, part.thoughtSignature);
+                block.textSignature = retainSignature(block.textSignature, part.thoughtSignature);
                 events.push({ type: "text_delta", contentIndex: index(), delta: part.text, partial: output });
               }
             }
@@ -409,7 +423,7 @@ export const stream = (
             output.rawStopReason = candidate.finishReason;
             output.stopReason = output.content.some((item) => item.type === "toolCall")
               ? "toolUse"
-              : google.mapStopReasonString(candidate.finishReason);
+              : stopReasonOf(candidate.finishReason);
           }
 
           const usage = data.usageMetadata;
@@ -475,11 +489,7 @@ export const stream = (
           output.rawStopReason = undefined;
           started = false;
         }
-        received = await consume(await retryProviderRequest(send, {
-          maxRetries: options?.maxRetries,
-          maxRetryDelayMs: options?.maxRetryDelayMs,
-          signal: options?.signal,
-        }));
+        received = await consume(await send());
       }
 
       if (!received) throw new Error("Gemini returned an empty response.");
@@ -499,7 +509,7 @@ export const stream = (
       events.end();
     } catch (error) {
       output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-      output.errorMessage = formatProviderError(normalizeProviderError(error), "Gemini");
+      output.errorMessage = formatThrownValue(error);
       events.push({ type: "error", reason: output.stopReason, error: output });
       events.end();
     }
@@ -508,14 +518,35 @@ export const stream = (
   return events;
 };
 
+/** Headroom pi leaves between the estimated context and the window. */
+const CONTEXT_SAFETY_TOKENS = 4096;
+
+/**
+ * The context already used: the last response's reported usage, plus about
+ * four characters per token for anything after it. The same estimate pi uses
+ * to keep an output ceiling from pushing a request past the context window.
+ */
+function estimateContextTokens(context: TranscriptContext): number {
+  const messages = context.messages;
+  let index = messages.length - 1;
+  while (index >= 0 && !(messages[index].role === "assistant" && (messages[index] as AssistantMessage).usage?.totalTokens)) index--;
+  const usage = index >= 0 ? (messages[index] as AssistantMessage).usage : undefined;
+  const counted = usage ? usage.input + usage.output + usage.cacheRead + usage.cacheWrite : 0;
+  const trailing = messages.slice(index + 1).reduce((sum, message) => sum + JSON.stringify(message).length, 0);
+  return counted + Math.ceil(trailing / 4);
+}
+
 export const streamSimple = (
   model: Model<Api>,
   context: TranscriptContext,
   options?: SimpleStreamOptions,
 ): AssistantMessageEventStream => {
   const level = options?.reasoning && model.reasoning ? clampThinkingLevel(model, options.reasoning) : undefined;
+  const requested = options?.maxTokens ?? model.maxTokens;
+  const room = model.contextWindow - estimateContextTokens(context) - CONTEXT_SAFETY_TOKENS;
   return stream(model, context, {
-    ...buildBaseOptions(model, context, options, options?.apiKey),
+    ...options,
+    maxTokens: model.contextWindow > 0 ? Math.min(requested, Math.max(1, room)) : requested,
     toolChoice: options?.toolChoice,
     reasoning: level === "off" ? undefined : level,
   });

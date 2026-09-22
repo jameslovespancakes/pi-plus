@@ -8,6 +8,19 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+### Fixed
+
+- A clean `pi install` of pi-plus failed to load its subscription providers
+  (`Cannot find module '@earendil-works/pi-ai/providers/openai-codex'`). pi
+  installs packages without their peers and supplies pi-ai to extensions only
+  through its root, `compat`, `oauth` and `providers/all` entry points, so
+  deep imports worked only on machines with a stray copy — which, where it
+  existed, was a different version from the host. Providers and model
+  catalogues now come from `providers/all`, the Gemini message conversion is
+  ported instead of deep-imported, and a test rejects any import pi does not
+  supply.
+- pi packages are declared as `"*"` peers, as pi's packaging docs require.
+
 ## [1.0.16] - 2026-09-22
 
 ### Added

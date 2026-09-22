@@ -1,5 +1,5 @@
 import type { Api, Model, ModelThinkingLevel, ThinkingLevelMap } from "@earendil-works/pi-ai";
-import { GOOGLE_MODELS } from "@earendil-works/pi-ai/providers/google.models";
+import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import { GEMINI_ENDPOINT, type RuntimeModelInfo } from "./client.ts";
 
 /**
@@ -52,7 +52,7 @@ const familyOf = (id: string): Family => FAMILIES.find((family) => family.test.t
 
 /** pi's own definition of the same model, when its Google catalogue carries it. */
 function piModel(id: string): Model<Api> | undefined {
-  return (GOOGLE_MODELS as Record<string, Model<Api>>)[id];
+  return (getBuiltinModels("google") as Model<Api>[]).find((model) => model.id === id);
 }
 
 interface Definition {

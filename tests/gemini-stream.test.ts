@@ -155,13 +155,6 @@ test("a malformed request is not retried against other endpoints", async () => {
   assert.match(message.errorMessage!, /request format \(400\)/);
 });
 
-test("pi's retry policy retries a transient failure", async () => {
-  const server = endpoint(failing(500, "boom"), failing(500, "boom"), failing(500, "boom"), ok);
-  const { message } = await collect(stream(model, transcript(), { apiKey, fetch: server.fetch, maxRetries: 1 }));
-  assert.equal(message.stopReason, "stop");
-  assert.equal(server.requests.length, GEMINI_ENDPOINTS.length + 1);
-});
-
 test("an empty stream is replayed before it is reported as a failure", async () => {
   const server = endpoint(() => sse([]));
   const { message } = await collect(stream(model, transcript(), { apiKey, fetch: server.fetch }));

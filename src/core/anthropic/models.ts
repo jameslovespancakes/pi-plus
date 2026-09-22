@@ -1,5 +1,8 @@
 import type { Model } from "@earendil-works/pi-ai";
-import { ANTHROPIC_MODELS as PI_ANTHROPIC_MODELS } from "@earendil-works/pi-ai/providers/anthropic.models";
+// `providers/all` is one of the entry points pi supplies from its own copy;
+// a deep `providers/anthropic.models` import has nothing to resolve against
+// on a clean install.
+import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import { cachedAnthropicModels, type LiveModel } from "./catalog.ts";
 
 /**
@@ -106,7 +109,7 @@ function nameFor(model: LiveModel): string {
   return version ? `Claude ${pretty} ${version}` : `Claude ${pretty}`;
 }
 
-const base = Object.values(PI_ANTHROPIC_MODELS as unknown as Record<string, AnthropicModel>);
+const base = getBuiltinModels("anthropic") as unknown as AnthropicModel[];
 
 /**
  * Newest model per family, used as the template for a model the live list

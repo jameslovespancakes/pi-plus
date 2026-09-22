@@ -1,42 +1,29 @@
-import type { Api, Model, ModelThinkingLevel, ToolChoice, TranscriptContext } from "@earendil-works/pi-ai";
-import { sanitizeSurrogates } from "@earendil-works/pi-ai/utils/sanitize-unicode";
-import { getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
+import {
+  getCurrentSystemPrompt,
+  getCurrentTools,
+  type Api,
+  type Model,
+  type ModelThinkingLevel,
+  type Tool,
+  type ToolChoice,
+  type TranscriptContext,
+} from "@earendil-works/pi-ai";
 import { stableUuid } from "./client.ts";
+import { convertMessages, sanitizeSurrogates, type Content, type Part } from "./convert.ts";
 import { runtimeModelId, thinkingConfig } from "./models.ts";
 import { bridgeSchema, selfContainedSchema } from "./schema.ts";
 
 /**
  * Builds a Gemini `streamGenerateContent` request.
  *
- * Inside the envelope the body is ordinary Gemini, so message conversion,
- * thought-signature validation, tool-call ids and function-calling mode all
- * come from pi's own Google adapter. What is added here is only what this
- * backend demands beyond the public Gemini API: the runtime model id, its
- * thinking budget, the Claude/GPT-OSS schema bridge, a few conversation-shape
- * repairs it enforces, and the agent envelope it expects.
+ * Inside the envelope the body is ordinary Gemini, converted the way pi's
+ * own Google adapter converts it (see convert.ts). What is added here is only
+ * what this backend demands beyond the public Gemini API: the runtime model
+ * id, its thinking budget, the Claude/GPT-OSS schema bridge, a few
+ * conversation-shape repairs it enforces, and the agent envelope it expects.
  */
 
-type GoogleShared = typeof import("@earendil-works/pi-ai/api/google-shared");
-let googleSharedModule: Promise<GoogleShared> | undefined;
-
-/** Loaded on first request, as pi loads its own Google adapter: it pulls in `@google/genai`. */
-export function googleShared(): Promise<GoogleShared> {
-  return googleSharedModule ??= import("@earendil-works/pi-ai/api/google-shared");
-}
-
-export interface Part {
-  text?: string;
-  thought?: boolean;
-  thoughtSignature?: string;
-  inlineData?: { mimeType?: string; data?: string };
-  functionCall?: { name?: string; args?: Record<string, unknown>; id?: string };
-  functionResponse?: { name?: string; id?: string; response?: Record<string, unknown>; parts?: Part[] };
-}
-
-export interface Content {
-  role: "user" | "model";
-  parts: Part[];
-}
+export type { Content, Part };
 
 export interface RequestOptions {
   /** Level after pi's clamp; undefined means thinking off. */
@@ -158,15 +145,23 @@ export function repairContents(contents: Content[], requireSignatures: boolean):
   return turns;
 }
 
-function toolDeclarations(declared: { functionDeclarations: Record<string, unknown>[] }[], bridge: boolean) {
-  return declared.map((group) => ({
-    functionDeclarations: group.functionDeclarations.map(({ parametersJsonSchema, parameters, ...rest }) => ({
-      ...rest,
+function toolDeclarations(tools: Tool[], bridge: boolean) {
+  return [{
+    functionDeclarations: tools.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
       ...(bridge
-        ? { parameters: bridgeSchema(parametersJsonSchema ?? parameters) }
-        : { parametersJsonSchema: selfContainedSchema(parametersJsonSchema ?? parameters) }),
+        ? { parameters: bridgeSchema(tool.parameters) }
+        : { parametersJsonSchema: selfContainedSchema(tool.parameters) }),
     })),
-  }));
+  }];
+}
+
+/** pi's tool choice as Gemini's calling mode; omitted unless asked, as pi does. */
+function callingMode(toolChoice: RequestOptions["toolChoice"]): string | undefined {
+  if (toolChoice === "none") return "NONE";
+  if (toolChoice === "any") return "ANY";
+  return toolChoice ? "AUTO" : undefined;
 }
 
 /** Random signed 64-bit decimal, the shape the Antigravity CLI uses for session ids. */
@@ -204,32 +199,21 @@ function envelope(context: TranscriptContext, contents: Content[], runtimeId: st
   };
 }
 
-export async function buildRequest(
+export function buildRequest(
   model: Model<Api>,
   context: TranscriptContext,
   projectId: string,
   options: RequestOptions = {},
-): Promise<GeminiRequest> {
-  const google = await googleShared();
-  // pi's Google helpers are typed against its own Google APIs; the body inside
-  // the envelope has exactly the same model semantics.
-  const googleModel = model as unknown as Model<"google-generative-ai">;
+): GeminiRequest {
   const runtimeId = runtimeModelId(model, options.reasoning);
-
-  const contents = repairContents(
-    google.convertMessages(googleModel, context) as unknown as Content[],
-    requiresThoughtSignatures(runtimeId),
-  );
+  const contents = repairContents(convertMessages(model, context), requiresThoughtSignatures(runtimeId));
 
   // The system prompt and tools live in the transcript's system messages,
   // never on the context object; reading them any other way sends neither.
   const systemPrompt = getCurrentSystemPrompt(context.messages);
   const tools = getCurrentTools(context.messages);
   // Strict tool sampling (Gemini's VALIDATED mode) is not offered by this backend.
-  const declared = google.convertTools(tools, false, false);
-  const mode = tools.length > 0
-    ? google.resolveGoogleFunctionCallingMode(tools, options.toolChoice, false)
-    : undefined;
+  const mode = tools.length > 0 ? callingMode(options.toolChoice) : undefined;
 
   const thinking = thinkingConfig(runtimeId, options.reasoning);
   const generationConfig = {
@@ -247,7 +231,7 @@ export async function buildRequest(
       contents,
       ...(systemPrompt && { systemInstruction: { role: "user", parts: [{ text: sanitizeSurrogates(systemPrompt) }] } }),
       generationConfig,
-      ...(declared && { tools: toolDeclarations(declared, usesToolBridge(runtimeId)) }),
+      ...(tools.length > 0 && { tools: toolDeclarations(tools, usesToolBridge(runtimeId)) }),
       ...(mode !== undefined && { toolConfig: { functionCallingConfig: { mode } } }),
       sessionId,
       labels,

@@ -169,6 +169,17 @@ node -p "require('C:/Users/jlenh/AppData/Roaming/npm/node_modules/@earendil-work
 
 These must match. Re-check after every pi upgrade.
 
+### Import only what pi supplies
+
+pi installs packages **without their peers** and hands extensions its own libraries through a fixed alias set (`core/extensions/loader.js`):
+
+```text
+@earendil-works/pi-ai · pi-ai/compat · pi-ai/oauth · pi-ai/providers/all
+@earendil-works/pi-coding-agent · pi-agent-core · pi-tui · typebox (+ /compile, /value)
+```
+
+A deep import such as `@earendil-works/pi-ai/providers/openai-codex` has nothing to resolve against on a clean install — the extension fails to load for everyone but a developer with a stray copy, and that copy is a different version from the host. Get pi's providers and models from `providers/all` (`builtinProviders()`, `getBuiltinModels()`); port what pi does not supply. `tests/packaging.test.ts` enforces this.
+
 ## 6. Context discipline
 
 Context is a budget the user pays for.
