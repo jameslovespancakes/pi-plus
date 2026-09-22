@@ -50,13 +50,13 @@ Nothing else is required, every feature configures itself from within pi.
 
 ### Pool every subscription
 
-Add multiple Claude, ChatGPT/Codex, Kimi Code, or xAI/Grok accounts. pi-plus
-keeps credentials separate, refreshes them safely, and supports sequential or
-quota-aware routing.
+Add multiple Claude, ChatGPT/Codex, Gemini, Kimi Code, or xAI/Grok accounts.
+pi-plus keeps credentials separate, refreshes them safely, and supports
+sequential or quota-aware routing.
 
 ```
 /accounts add anthropic work
-/accounts add kimi-coding personal
+/accounts add gemini personal
 /routing quota-aware
 ```
 
@@ -76,6 +76,31 @@ footer stays a fixed height however many you pool.
 Account and routing commands are provider-agnostic. Sequential routing uses
 account order; quota-aware routing uses reported capacity and fairly probes
 accounts whose provider does not publish quota headers.
+
+### Gemini on a Google account
+
+pi keeps only the metered `google/*` API. pi-plus adds `gemini/*`, served by
+Google's Antigravity backend and pooled like every other subscription. The
+provider is ported from [`pi-antigravity`](https://github.com/Rahularya01/pi-antigravity).
+`/login` → **Gemini** signs in through the browser (callback on port 51121; on
+a headless machine, paste the callback URL when asked).
+
+```
+/login gemini
+/accounts add gemini personal
+```
+
+Models include Gemini 3.x Flash and 3.1 Pro, plus the Claude and GPT-OSS
+models the backend also serves; each thinking level routes to the backend's own
+runtime model. The list refreshes from your account, so newly enabled models
+appear without an update, and `/models-refresh` forces it.
+
+A quota-walled account is held out of routing until it resets, so the next
+request goes to another pooled account. `PI_GEMINI_PROJECT_ID` pins a Cloud
+project; most accounts need none.
+
+`gemini/*` is auto-approved because the subscription has already paid for it;
+the metered `google/*` still asks.
 
 ### Pick models on evidence
 
@@ -259,9 +284,14 @@ pi-plus is a thin layer over other people's work.
 | [`pi`](https://pi.dev/) | the host agent and the entire extension API | MIT |
 | [`xxhash-wasm`](https://github.com/jungomi/xxhash-wasm) | vendored into `src/core/anthropic/vendor/` for the billing checksum | MIT |
 | [`pi-workflow-engine`](https://github.com/timbrinded/pi-workflow-engine) | embedded workflow runtime and built-in workflows | MIT |
+| [`pi-antigravity`](https://github.com/Rahularya01/pi-antigravity) | reference for the `gemini` provider: Antigravity OAuth, wire format, model routing and catalogue discovery | MIT |
 
 The workflow engine keeps its upstream license in
 [`src/domains/workflows/LICENSE.md`](src/domains/workflows/LICENSE.md).
+
+The `gemini` provider in `src/core/gemini/` is ported from `pi-antigravity`
+0.8.0 and adapted to pi-plus's pooled accounts and pi's own Google adapter; its
+upstream license is kept in [`src/core/gemini/LICENSE.md`](src/core/gemini/LICENSE.md).
 
 The Anthropic provider, OAuth, quota and routing were originally adopted from
 [`@cortexkit/pi-anthropic-auth`](https://github.com/cortexkit/anthropic-auth)

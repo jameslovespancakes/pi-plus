@@ -28,7 +28,7 @@ export interface PiPlusConfig {
 const DEFAULTS: PiPlusConfig = {
   env: {},
   policy: {
-    autoApprove: ["anthropic/*", "openai-codex/*", "kimi-coding/*", "xai/*"],
+    autoApprove: ["anthropic/*", "openai-codex/*", "gemini/*", "kimi-coding/*", "xai/*"],
     requireApproval: ["openrouter/*", "google/*", "openai/*"],
     deny: [],
   },

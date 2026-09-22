@@ -40,7 +40,6 @@ interface OAuthPoolFile {
   providers: Record<string, ProviderOAuthPool>;
 }
 
-const EMPTY_FILE: OAuthPoolFile = { version: 1, providers: {} };
 const DEFAULT_PATH = "pi-plus-oauth-accounts.json";
 const fileCache = new Map<string, OAuthPoolFile>();
 
@@ -52,7 +51,10 @@ function loadFile(path = oauthPoolPath()): OAuthPoolFile {
   const cached = fileCache.get(path);
   if (cached) return cached;
 
-  const raw = readJson<Partial<OAuthPoolFile>>(path, EMPTY_FILE);
+  // The fallback is built per call: a shared constant would be aliased into
+  // `file.providers` whenever the file is missing, and every later write would
+  // accumulate in it — outliving both the cache and the file itself.
+  const raw = readJson<Partial<OAuthPoolFile>>(path, { version: 1, providers: {} });
   const file: OAuthPoolFile = {
     version: 1,
     providers: raw.providers && typeof raw.providers === "object" ? raw.providers : {},

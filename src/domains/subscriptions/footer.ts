@@ -6,7 +6,7 @@ import { formatTokens, sanitize } from "../../ui/format.ts";
 
 /** Compact session footer with shared subscription usage bars. */
 
-const SUBSCRIPTION_PROVIDERS = new Set(["anthropic", "openai-codex", "kimi-coding", "xai"]);
+const SUBSCRIPTION_PROVIDERS = new Set(["anthropic", "openai-codex", "gemini", "kimi-coding", "xai"]);
 
 interface SessionTotals {
   input: number;

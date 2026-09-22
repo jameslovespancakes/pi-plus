@@ -21,7 +21,7 @@ import { fitId } from "../../ui/format.ts";
  * pick a model per task instead of relying on fixed small/medium/big profiles.
  */
 
-const SUBSCRIPTION_PROVIDERS = new Set(["anthropic", "openai-codex", "kimi-coding"]);
+const SUBSCRIPTION_PROVIDERS = new Set(["anthropic", "openai-codex", "gemini", "kimi-coding"]);
 
 type SortKey = "coding" | "intelligence" | "agentic" | "reasoning" | "cost" | "speed" | "cost_efficiency";
 

@@ -28,6 +28,20 @@ export interface PooledOAuthProviderSpec<TApi extends Api> {
   /** Stable identity used to reject a duplicate login. Defaults to JWT claims. */
   identityOf?(access: string): string | undefined;
   /**
+   * Identity read from the whole credential rather than the access token.
+   * Providers that issue opaque tokens (Google hands out `ya29.` strings with
+   * no readable claims) have no identity inside the token at all, so a stable
+   * value discovered at login — an email, say — is stored alongside it and
+   * read back here. Takes precedence over `identityOf` when present.
+   */
+  identityOfCredential?(credential: OAuthCredential): string | undefined;
+  /**
+   * Recovers the access token from what `toAuth()` put in `options.apiKey`,
+   * for providers that encode more than the token there. Without it, quota
+   * observed on a response cannot be attributed to the account that served it.
+   */
+  accessTokenOf?(apiKey: string): string | undefined;
+  /**
    * Records a response's quota signal against an account. Defaults to the
    * generic `x-ratelimit-*` reader; providers with their own headers (Codex
    * sends `x-codex-*`) override it. Must never throw: it runs inside the
@@ -72,15 +86,17 @@ async function authenticate<TApi extends Api>(spec: PooledOAuthProviderSpec<TApi
   return oauthFor(spec).login({
     signal,
     notify: (event) => { void notifyAuthEvent(ctx, event); },
+    // `prompt.signal` lets a flow retract a prompt, e.g. the paste box once
+    // the browser callback has already answered it.
     prompt: async (prompt) => {
       if (prompt.type === "select") {
         const labels = prompt.options.map((option) => option.label);
-        const selected = await ctx.ui.select(prompt.message, labels);
+        const selected = await ctx.ui.select(prompt.message, labels, { signal: prompt.signal });
         const index = selected ? labels.indexOf(selected) : -1;
         if (index < 0) throw new Error("Login cancelled.");
         return prompt.options[index].id;
       }
-      const value = await ctx.ui.input(prompt.message, prompt.placeholder);
+      const value = await ctx.ui.input(prompt.message, prompt.placeholder, { signal: prompt.signal });
       if (!value) throw new Error("Login cancelled.");
       return value;
     },
@@ -95,12 +111,20 @@ function identityFor<TApi extends Api>(spec: PooledOAuthProviderSpec<TApi>, acce
   return (spec.identityOf ?? oauthIdentity)(access);
 }
 
+/** Credential-wide identity where the provider has one, else the token's. */
+function credentialIdentity<TApi extends Api>(
+  spec: PooledOAuthProviderSpec<TApi>,
+  credential: OAuthCredential,
+): string | undefined {
+  return spec.identityOfCredential?.(credential) ?? identityFor(spec, credential.access);
+}
+
 function duplicateAccount<TApi extends Api>(
   spec: PooledOAuthProviderSpec<TApi>,
   credential: OAuthCredential,
   excludeId?: string,
 ): PooledOAuthAccount | undefined {
-  const identity = identityFor(spec, credential.access);
+  const identity = credentialIdentity(spec, credential);
   return storeFor(spec).load().accounts.find((account) =>
     account.id !== excludeId && (identity ? account.identity === identity : account.access === credential.access));
 }
@@ -114,7 +138,7 @@ export function createPooledOAuthAdapter<TApi extends Api>(spec: PooledOAuthProv
 
     async list(): Promise<ManagedAccount[]> {
       return store().load().accounts.map((account) => {
-        const identity = account.identity ?? identityFor(spec, account.access);
+        const identity = account.identity ?? credentialIdentity(spec, account);
         return {
           id: account.id,
           label: accountLabel(spec, account),
@@ -140,7 +164,7 @@ export function createPooledOAuthAdapter<TApi extends Api>(spec: PooledOAuthProv
         id: randomUUID(),
         label,
         enabled: true,
-        identity: identityFor(spec, credential.access),
+        identity: credentialIdentity(spec, credential),
         addedAt: Date.now(),
       });
       return label;
@@ -158,7 +182,7 @@ export function createPooledOAuthAdapter<TApi extends Api>(spec: PooledOAuthProv
       store().saveAccount({
         ...account,
         ...credential,
-        identity: identityFor(spec, credential.access),
+        identity: credentialIdentity(spec, credential),
       });
       return account.label;
     },
@@ -264,7 +288,7 @@ export function registerPooledOAuthProvider<TApi extends Api>(pi: ExtensionAPI, 
     ...options,
     onResponse: async (response: { status: number; headers: Record<string, string> }, model: unknown) => {
       try {
-        recordQuotaResponse(spec, requestAccessToken(options), response.status, response.headers);
+        recordQuotaResponse(spec, requestAccessToken(spec, options), response.status, response.headers);
       } catch {
         // Quota accounting is telemetry; it must never fail the response.
       }
@@ -286,8 +310,10 @@ export function registerPooledOAuthProvider<TApi extends Api>(pi: ExtensionAPI, 
   });
 }
 
-function requestAccessToken(options: any): string | undefined {
-  if (typeof options?.apiKey === "string") return options.apiKey;
+function requestAccessToken<TApi extends Api>(spec: PooledOAuthProviderSpec<TApi>, options: any): string | undefined {
+  if (typeof options?.apiKey === "string") {
+    return spec.accessTokenOf ? spec.accessTokenOf(options.apiKey) : options.apiKey;
+  }
   const headers = options?.headers;
   if (!headers || typeof headers !== "object") return undefined;
   const authorization = Object.entries(headers).find(([key]) => key.toLowerCase() === "authorization")?.[1];

@@ -16,9 +16,14 @@ export interface ManagedAccount {
 /** Fixed account order or provider quota-aware selection. */
 export type RoutingMode = "sequential" | "quota-aware";
 
+/** Dismisses a dialog programmatically, e.g. a paste prompt once the browser callback wins. */
+export interface AccountDialogOptions {
+  signal?: AbortSignal;
+}
+
 export interface AccountUi {
-  input(title: string, placeholder?: string): Promise<string | undefined>;
-  select(title: string, options: string[]): Promise<string | undefined>;
+  input(title: string, placeholder?: string, options?: AccountDialogOptions): Promise<string | undefined>;
+  select(title: string, options: string[], dialog?: AccountDialogOptions): Promise<string | undefined>;
   confirm(title: string, message: string): Promise<boolean>;
   notify(message: string, type?: "info" | "warning" | "error"): void;
 }

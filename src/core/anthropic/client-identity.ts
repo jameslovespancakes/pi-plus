@@ -8,7 +8,7 @@ import { xxhash64 } from "./xxhash64.ts";
  */
 
 /** Pinned to the Claude Code release being imitated. */
-export const CLAUDE_CODE_VERSION = "2.1.258";
+export const CLAUDE_CODE_VERSION = "2.1.280";
 
 /** Claude Code checksum constants. They can change between CLI releases. */
 const CCH_SEED = 0x4d659218e32a3268n;
@@ -163,12 +163,31 @@ export function selectBetas(body: unknown, extra: string[] = []): string {
 }
 
 /** Headers presenting this client as Claude Code. */
-export function clientIdentityHeaders(body?: unknown, existingBetas?: string): Record<string, string> {
-  const incoming = (existingBetas ?? "").split(",").map((b) => b.trim()).filter(Boolean);
+/**
+ * Betas this identity adds, on top of whatever pi computed for the model.
+ *
+ * These must be *merged*, never substituted. pi enables model-specific betas
+ * that authorise fields it also emits — `mid-conversation-output-config-…`
+ * covers the `output_config` system messages it inserts for adaptive-effort
+ * models. Replacing the list leaves those messages in the body with nothing
+ * permitting them, and Anthropic rejects the request:
+ *
+ *     messages.1.output_config: Extra inputs are not permitted
+ *
+ * which is a 400 on every Opus 5 request and reads like a pi bug.
+ */
+export function identityBetas(body?: unknown, existing: readonly string[] = []): string[] {
+  return [...new Set([...existing.map((beta) => beta.trim()).filter(Boolean), ...selectBetas(body).split(",")])];
+}
+
+/**
+ * Deliberately omits `anthropic-beta`. pi copies that header verbatim into the
+ * request body's `betas`, so setting it here would discard pi's own list; the
+ * merge happens per request through {@link identityBetas} instead.
+ */
+export function clientIdentityHeaders(): Record<string, string> {
   return {
     "user-agent": USER_AGENT,
-    // Pi copies this header into the request body's betas field.
-    "anthropic-beta": selectBetas(body, incoming),
     "anthropic-version": "2023-06-01",
     "anthropic-dangerous-direct-browser-access": "true",
     "x-app": "cli",

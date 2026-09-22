@@ -1,13 +1,15 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { authorize, exchange, refreshToken } from "../../core/anthropic/oauth.ts";
 import {
-  billingHeader, clientIdentityHeaders, firstUserText, prependPromptBlock, signRequestBody, splitSystemPrompt,
+  billingHeader, clientIdentityHeaders, firstUserText, identityBetas, prependPromptBlock, signRequestBody,
+  splitSystemPrompt,
 } from "../../core/anthropic/client-identity.ts";
 import {
   anthropicAccountIdentity,
   cachedAnthropicAccountIdentity,
 } from "../../core/anthropic/identity.ts";
-import { ANTHROPIC_MODELS } from "../../core/anthropic/models.ts";
+import { catalogIsStale, refreshAnthropicCatalog } from "../../core/anthropic/catalog.ts";
+import { ANTHROPIC_MODELS, buildAnthropicModels, type ModelSpec } from "../../core/anthropic/models.ts";
 import {
   ACCESS_REFRESH_INTERVAL_MS,
   applyQuotaHeaders,
@@ -17,6 +19,7 @@ import {
   MAIN_ACCOUNT_ID, familyForModel, selectAccount, type Candidate,
 } from "../../core/anthropic/routing.ts";
 import { getRoutingMode, loadAccounts, saveAccount } from "../../core/anthropic/store.ts";
+import { refreshAbortSignal } from "../../core/accounts/routing.ts";
 
 /**
  * Anthropic uses pi's Messages API client with per-request account routing.
@@ -31,8 +34,11 @@ function isAnthropicMessagesPayload(payload: any): boolean {
   if ("instructions" in payload || "input" in payload) return false;
   if (!Array.isArray(payload.messages)) return false;
   const model = typeof payload.model === "string" ? payload.model.toLowerCase() : "";
-  return model.startsWith("claude") || ANTHROPIC_MODELS.some((m: any) => m.id === payload.model);
+  return model.startsWith("claude") || registeredModels.some((m) => m.id === payload.model);
 }
+
+/** The catalogue currently registered; replaced when discovery finds a new model. */
+let registeredModels: ModelSpec[] = ANTHROPIC_MODELS;
 
 let lastSelected: { id: string; at: number } | undefined;
 const accountLastUsed = new Map<string, number>();
@@ -114,12 +120,40 @@ async function login(callbacks: any) {
   return { access: result.access, refresh: result.refresh, expires: result.expires };
 }
 
-export function registerAnthropicProvider(pi: ExtensionAPI): void {
+/**
+ * Asks Anthropic which models this subscription can actually use.
+ *
+ * pi's catalogue is generated at build time, so a newly shipped model is
+ * missing until pi is upgraded. Discovery is best-effort and off the request
+ * path: a failure leaves the bundled catalogue in place, which is exactly the
+ * behaviour without this function.
+ */
+async function discoverModels(pi: ExtensionAPI, ctx: any, force = false): Promise<void> {
+  if (!force && !catalogIsStale()) return;
+  try {
+    const resolved = await ctx.modelRegistry?.getProviderAuth?.("anthropic");
+    if (!resolved?.auth) return;
+
+    const added = await refreshAnthropicCatalog(
+      { ...resolved.auth, source: resolved.source },
+      refreshAbortSignal(ctx.signal),
+    );
+    if (added.length === 0) return;
+
+    registeredModels = buildAnthropicModels();
+    registerProvider(pi);
+    ctx.ui?.notify?.(`New Anthropic models available: ${added.join(", ")}`, "info");
+  } catch {
+    // Offline, rate limited, or an expired credential: keep what we have.
+  }
+}
+
+function registerProvider(pi: ExtensionAPI): void {
   pi.registerProvider("anthropic", {
     name: "Anthropic",
     baseUrl: "https://api.anthropic.com",
     api: "anthropic-messages",
-    models: ANTHROPIC_MODELS,
+    models: registeredModels,
     // Required for subscription billing. See client-identity.ts.
     headers: clientIdentityHeaders(),
     oauth: {
@@ -131,6 +165,26 @@ export function registerAnthropicProvider(pi: ExtensionAPI): void {
         return { access: refreshed.access, refresh: refreshed.refresh, expires: refreshed.expires };
       },
       getApiKey: (credentials: any) => routeAccessToken(credentials.access),
+    },
+  });
+}
+
+export function registerAnthropicProvider(pi: ExtensionAPI): void {
+  registerProvider(pi);
+
+  pi.registerCommand("models-refresh", {
+    description: "Re-ask subscription providers which models your accounts can use",
+    handler: async (_args, ctx: any) => {
+      await discoverModels(pi, ctx, true);
+      // Live catalogues (Gemini's, pi's remote ones) answer pi's own
+      // refresh; `force` bypasses their freshness windows.
+      const result = await ctx.modelRegistry?.refresh?.({ force: true }).catch(() => undefined);
+      const failed = [...(result?.errors?.keys?.() ?? [])];
+      ctx.ui.notify(
+        `${registeredModels.length} Anthropic models available.`
+          + (failed.length > 0 ? ` Could not refresh: ${failed.join(", ")}.` : " Other catalogues refreshed."),
+        failed.length > 0 ? "warning" : "info",
+      );
     },
   });
 
@@ -154,7 +208,10 @@ export function registerAnthropicProvider(pi: ExtensionAPI): void {
       ...(split.systemText ? [{ type: "text", text: split.systemText }] : []),
     ];
 
-    const signed = await signRequestBody(JSON.stringify({ ...payload, system, messages }));
+    // Union, not replacement: pi's betas authorise fields pi itself emits.
+    const betas = identityBetas(payload, Array.isArray(payload.betas) ? payload.betas : []);
+
+    const signed = await signRequestBody(JSON.stringify({ ...payload, betas, system, messages }));
     return JSON.parse(signed);
   });
 
@@ -190,9 +247,11 @@ export function registerAnthropicProvider(pi: ExtensionAPI): void {
     void refreshAllQuota().catch(() => {});
   });
 
-  pi.on("session_start", async () => {
+  pi.on("session_start", async (_event: any, ctx: any) => {
     startRefreshLoop();
     void refreshAllQuota().catch(() => {});
+    // Off the request path and TTL-gated, so this is one call a day at most.
+    void discoverModels(pi, ctx).catch(() => {});
   });
 
   pi.on("session_shutdown", async () => {

@@ -42,8 +42,8 @@ function bridge(pi: ExtensionAPI, ctx: any): AccountContext {
     hasUI: ctx.hasUI,
     signal: ctx.signal,
     ui: {
-      input: (title, placeholder) => ctx.ui.input(title, placeholder),
-      select: (title, options) => ctx.ui.select(title, options),
+      input: (title, placeholder, options) => ctx.ui.input(title, placeholder, options),
+      select: (title, options, dialog) => ctx.ui.select(title, options, dialog),
       confirm: (title, message) => ctx.ui.confirm(title, message),
       notify: (message, type) => ctx.ui.notify(message, type ?? "info"),
     },

@@ -8,6 +8,51 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+### Added
+
+- `gemini` provider for subscription Gemini on a Google account (pi keeps only
+  the metered `google` API), served by Google's Antigravity backend and ported
+  from [`pi-antigravity`](https://github.com/Rahularya01/pi-antigravity) 0.8.0
+  (MIT; notice in `src/core/gemini/LICENSE.md`). It appears in `/login` and
+  `/accounts` and joins the shared OAuth pool. Serves Gemini 3.x Flash and
+  3.1 Pro plus the Claude and GPT-OSS models the backend offers, with each
+  thinking level routed to its runtime model. The catalogue refreshes live from the account (4h
+  freshness window; `/models-refresh` forces it). Message conversion, retry
+  policy and error formatting stay pi's; the envelope, endpoint fallback,
+  Claude/GPT-OSS tool-schema bridge, conversation repairs, stall watchdog and
+  quota-wall handling are implemented here. A quota-walled account is held out
+  of routing until its reset.
+- `/models-refresh` also force-refreshes pi's live model catalogues.
+- Pooled `/accounts` sign-ins dismiss the paste prompt once the browser
+  callback arrives.
+- `PooledOAuthProviderSpec.identityOfCredential` for providers whose access
+  tokens are opaque, and `accessTokenOf` so quota can be attributed when
+  `toAuth()` encodes more than the token into `apiKey`.
+
+- Live Anthropic model discovery. pi's catalogue is generated at build time,
+  so a newly shipped model stayed invisible until pi was upgraded —
+  `claude-opus-5-5` was usable for days while the picker denied it existed.
+  The list is now read from `/v1/models`, cached for a day, and merged over
+  pi's catalogue; a discovered model inherits limits and pricing from the
+  newest model of its family. `/models-refresh` re-asks on demand.
+
+### Fixed
+
+- Anthropic requests substituted pi's beta list instead of merging with it,
+  dropping the model-specific betas that authorise fields pi itself emits.
+  Every Opus 5 request failed with `messages.1.output_config: Extra inputs are
+  not permitted`. The Claude Code identity no longer sets `anthropic-beta`
+  (pi copies that header verbatim into the body) and unions the two lists per
+  request instead.
+- The Anthropic catalogue replaced pi's rather than extending it, so
+  `claude-opus-4-6`, `claude-opus-4-7`, `claude-sonnet-4-6` and the dated
+  aliases silently disappeared from the picker.
+- Claude Code identity version raised to 2.1.280; Anthropic rejects Opus 5.5
+  below it.
+- The shared OAuth pool aliased a module-level empty-file constant when the
+  accounts file did not exist, so every later write accumulated in it and
+  outlived both the cache and the file.
+
 ## [1.0.15] - 2026-09-21
 
 ### Changed

@@ -15,7 +15,9 @@ export interface PolicyFile {
 }
 
 const DEFAULT_POLICY: PolicyFile = {
-  autoApprove: ["anthropic/*", "openai-codex/*"],
+  // `google/*` is the metered Gemini API; `gemini/*` is the subscription,
+  // which the account's plan has already paid for.
+  autoApprove: ["anthropic/*", "openai-codex/*", "gemini/*"],
   requireApproval: ["openrouter/*", "google/*", "openai/*", "xai/*"],
   deny: [],
 };
