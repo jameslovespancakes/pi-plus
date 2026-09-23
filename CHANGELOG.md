@@ -8,6 +8,14 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+### Fixed
+
+- The Claude pool went to "unknown/stale" with 5h n/a whenever a window reset
+  between polls. A window whose reset has passed now reads full until the next
+  poll replaces it; a reading that failed to refresh still shows as unknown.
+- Bar rows were one column narrower than their titles, so the right-hand
+  column's bars sat one character left of its heading.
+
 ## [1.0.18] - 2026-09-23
 
 ### Added

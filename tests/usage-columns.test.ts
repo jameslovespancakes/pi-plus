@@ -108,6 +108,29 @@ test("with no Codex figures the default column is Gemini's", () => {
   assert.match(rightHalf(lines[0]), /^Gemini/);
 });
 
+test("the right column lines up under its title on every row", () => {
+  for (const width of [80, 100, 117, 160]) {
+    const lines = renderUsageLines(mixed, theme, width, { provider: "anthropic" }).map(plain);
+    const start = lines[0].indexOf("Codex");
+    assert.ok(start > 0);
+    assert.equal(lines[1].slice(start, start + 2), "5h", `5h under Codex at width ${width}`);
+    assert.equal(lines[2].slice(start, start + 6), "weekly", `weekly under Codex at width ${width}`);
+  }
+});
+
+test("a window whose reset has passed reads full, not unknown", () => {
+  // Reproduces the live footer: both 5h windows reset minutes after the last
+  // poll, and the pool went to "unknown/stale" with 5h n/a until the next one.
+  const justReset = rows.map((row) => row.label === "5h" ? { ...row, resetAt: now - 60_000 } : row);
+  const lines = renderUsageLines({ ...state, rows: justReset }, theme, 100).map(plain);
+  assert.match(lines[0], /2\/2 ready/);
+  assert.match(lines[1], /^ {2}5h +\S+ +100%/);
+
+  const failed = justReset.map((row) => ({ ...row, stale: true }));
+  assert.match(plain(renderUsageLines({ ...state, rows: failed }, theme, 100)[0]), /unknown\/stale/,
+    "a reading that failed to refresh stays unknown");
+});
+
 test("a row without checkedAt is never fresh", () => {
   // Regression: cached rows built from a stored snapshot omitted checkedAt,
   // so isFresh rejected every one and the whole HUD read "unknown/stale".

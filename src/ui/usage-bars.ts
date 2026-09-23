@@ -8,6 +8,7 @@ import {
   OBSERVED_PROVIDERS,
   poolAvailability,
   pooledWindow,
+  rollOver,
   scopedLabels,
   type UsageRow,
 } from "../core/quota/pool.ts";
@@ -163,7 +164,9 @@ function renderCell(theme: any, cell: Cell, labelWidth: number, cellWidth: numbe
   const label = theme.fg(cell.active ? "accent" : "muted", cell.label.slice(0, labelWidth).padEnd(labelWidth));
   const reset = formatShortReset(cell.resetAt);
   const resetWidth = 4;
-  const barWidth = Math.max(4, cellWidth - labelWidth - 6 - resetWidth - 3);
+  // label, space, bar, space, 5-wide percent, space, reset: exactly cellWidth,
+  // so every row's right column starts under its title.
+  const barWidth = Math.max(4, cellWidth - labelWidth - resetWidth - 8);
 
   if (cell.remaining === undefined) {
     return `${label} ${theme.fg("dim", "·".repeat(barWidth))} ${theme.fg("dim", "  n/a")}${" ".repeat(resetWidth + 1)}`;
@@ -188,7 +191,8 @@ function renderCell(theme: any, cell: Cell, labelWidth: number, cellWidth: numbe
   return `${label} ${bar} ${percent} ${theme.fg("dim", reset.padEnd(resetWidth))}`;
 }
 
-export function renderUsageLines(state: UsageState, theme: any, width: number, active?: ActiveModel): string[] {
+export function renderUsageLines(raw: UsageState, theme: any, width: number, active?: ActiveModel): string[] {
+  const state = { ...raw, rows: rollOver(raw.rows) };
   if (state.loading) return [theme.fg("dim", "  usage: loading…")];
   if (state.rows.length === 0) {
     if (state.errors.length > 0) return state.errors.map((error) => theme.fg("warning", `  ${error}`));
@@ -219,7 +223,8 @@ export function renderUsageLines(state: UsageState, theme: any, width: number, a
   return lines.map((line) => truncateToWidth(line, width, ""));
 }
 
-export function usageSummaryText(state: UsageState): string {
+export function usageSummaryText(raw: UsageState): string {
+  const state = { ...raw, rows: rollOver(raw.rows) };
   const combined = ["5h", "7d", ...scopedLabels(state.rows)].map((label) => {
     const pool = combinedWindow(state.rows, label, state.accounts, Date.now(), true);
     return `Claude combined ${label}: ${pool

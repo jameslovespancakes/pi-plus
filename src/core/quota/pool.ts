@@ -32,6 +32,18 @@ export const OBSERVED_PROVIDERS: ReadonlyArray<readonly [providerId: string, gro
 export const isFresh = (row: UsageRow, now = Date.now()) => !row.stale && !!row.checkedAt
   && now - row.checkedAt < CLAUDE_FRESH_MS && (!row.resetAt || row.resetAt > now);
 
+/**
+ * Rows as they stand now. A window whose reset has passed has refilled,
+ * whatever it read before, so it reports full with no reset rather than
+ * being discarded as unknown until the next poll replaces it. Freshness
+ * still comes from `checkedAt`: a failed or old reading stays unknown.
+ */
+export function rollOver(rows: UsageRow[], now = Date.now()): UsageRow[] {
+  return rows.map((row) => (row.resetAt !== undefined && row.resetAt <= now
+    ? { ...row, remaining: 100, resetAt: undefined }
+    : row));
+}
+
 /** Percent of combined capacity, not a claim that quota transfers between accounts.
  * Without published capacities this is explicitly an equal-account estimate.
  */

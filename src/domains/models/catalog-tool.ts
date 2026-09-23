@@ -14,7 +14,7 @@ import {
 } from "../../core/catalog/quality.ts";
 import { ensureFresh, usageState } from "../../services/usage-service.ts";
 import { geminiQuotaFamily } from "../../core/gemini/quota.ts";
-import { combinedWindow, isGeminiAccount, pooledWindow } from "../../core/quota/pool.ts";
+import { combinedWindow, isGeminiAccount, pooledWindow, rollOver } from "../../core/quota/pool.ts";
 import { env, isFromProcessEnv, maskSecret, setEnv } from "../../core/env.ts";
 import { fitId } from "../../ui/format.ts";
 
@@ -57,7 +57,7 @@ interface Entry {
 
 function quotaFor(provider: string, modelId: string): number | undefined {
   const state = usageState();
-  const rows = state.rows;
+  const rows = rollOver(state.rows);
   if (provider === "anthropic") {
     // The pool's figure, not whichever account happens to be listed first.
     const pool = combinedWindow(rows, "5h", state.accounts, Date.now(), true);
