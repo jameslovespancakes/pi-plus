@@ -19,6 +19,16 @@ export type UsageRow = {
  */
 export const CLAUDE_FRESH_MS = 12 * 60_000;
 export const isClaudeAccount = (row: UsageRow) => row.group.startsWith("Claude ") && !row.group.startsWith("Claude pool ×");
+export const isGeminiAccount = (row: UsageRow) => row.group.startsWith("Gemini ");
+
+/**
+ * Pooled providers with no usage endpoint, and the group their header-observed
+ * rate-limit reading is filed under. Their bars can only show what responses said.
+ */
+export const OBSERVED_PROVIDERS: ReadonlyArray<readonly [providerId: string, group: string]> = [
+  ["kimi-coding", "Kimi"],
+  ["xai", "Grok"],
+];
 export const isFresh = (row: UsageRow, now = Date.now()) => !row.stale && !!row.checkedAt
   && now - row.checkedAt < CLAUDE_FRESH_MS && (!row.resetAt || row.resetAt > now);
 
@@ -26,7 +36,19 @@ export const isFresh = (row: UsageRow, now = Date.now()) => !row.stale && !!row.
  * Without published capacities this is explicitly an equal-account estimate.
  */
 export function combinedWindow(rows: UsageRow[], label: string, expected: number, now = Date.now(), allowPartial = false) {
-  const matching = rows.filter((r) => isClaudeAccount(r) && r.label === label && isFresh(r, now));
+  return pooledWindow(rows, label, expected, isClaudeAccount, now, allowPartial);
+}
+
+/** {@link combinedWindow} for any pooled provider's account rows. */
+export function pooledWindow(
+  rows: UsageRow[],
+  label: string,
+  expected: number,
+  isMember: (row: UsageRow) => boolean,
+  now = Date.now(),
+  allowPartial = false,
+) {
+  const matching = rows.filter((r) => isMember(r) && r.label === label && isFresh(r, now));
   const partial = matching.length !== expected;
   if (!expected || !matching.length || (partial && !allowPartial)) return undefined;
   const weighted = matching.every((r) => typeof r.capacity === "number" && r.capacity > 0);

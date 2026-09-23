@@ -44,6 +44,70 @@ test("the real windows still render with values", () => {
   assert.match(claudeHalf(lines[2] ?? ""), /\d+%/, "Claude weekly shows a percentage");
 });
 
+const plain = (line: string) => line.replace(/\u001b\[[0-9;]*m/g, "");
+/**
+ * The right-hand column of a 100-wide line. The Claude half ends by column 49
+ * and the gap is three spaces, so column 50 always falls inside the gap.
+ */
+const rightHalf = (line: string) => plain(line).slice(50).trimStart();
+
+const geminiRows = [
+  { group: "Gemini Primary", label: "Flash", remaining: 99, checkedAt: now, resetAt: now + 6 * 86400_000 },
+  { group: "Gemini Primary", label: "Pro", remaining: 80, checkedAt: now, resetAt: now + 6 * 86400_000 },
+  { group: "Gemini Primary", label: "Claude", remaining: 100, checkedAt: now, resetAt: now + 7 * 86400_000 },
+  { group: "Gemini Primary", label: "GPT", remaining: 60, checkedAt: now, resetAt: now + 7 * 86400_000 },
+];
+const codexRows = [{ group: "Codex", label: "weekly", remaining: 18, checkedAt: now, resetAt: now + 3 * 86400_000 }];
+const mixed = { ...state, rows: [...rows, ...codexRows, ...geminiRows], geminiAccounts: 1, codexPlan: "pro" };
+
+test("the right column shows Codex while Claude is in use", () => {
+  const lines = renderUsageLines(mixed, theme, 100, { provider: "anthropic", modelId: "claude-opus-5-5" });
+  assert.match(rightHalf(lines[0]), /^Codex \u00b7 pro/);
+  assert.match(rightHalf(lines[2]), /weekly .* 18%/);
+});
+
+test("the right column swaps to Gemini while a Gemini model is in use", () => {
+  const lines = renderUsageLines(mixed, theme, 100, { provider: "gemini", modelId: "gemini-3.8-flash" });
+  assert.match(rightHalf(lines[0]), /^Gemini \u00b7 1\/1 ready/);
+  assert.match(rightHalf(lines[1]), /^Flash .* 99%/);
+  assert.match(rightHalf(lines[2]), /^Pro .* 80%/);
+  assert.match(rightHalf(lines[3]), /^Claude .* 100%/);
+  assert.match(plain(lines[0]), /^ {2}Claude \u03a32/, "Claude keeps the left column");
+});
+
+test("Gemini's third bar follows the third-party family in use", () => {
+  const lines = renderUsageLines(mixed, theme, 100, { provider: "gemini", modelId: "gpt-oss-120b" });
+  assert.match(rightHalf(lines[3]), /^GPT .* 60%/);
+});
+
+test("the active Gemini family is highlighted", () => {
+  const marking = { fg: (color: string, text: string) => (color === "accent" ? `[${text.trim()}]` : text), bold: (t: string) => t };
+  const lines = renderUsageLines(mixed, marking, 100, { provider: "gemini", modelId: "gemini-3.1-pro" });
+  assert.ok(lines.some((line) => line.includes("[Pro]")), "Pro is the active family");
+  assert.ok(!lines.some((line) => line.includes("[Flash]")), "Flash is not");
+});
+
+test("a Claude model served through Gemini does not steer the Claude column", () => {
+  const lines = renderUsageLines(mixed, theme, 100, { provider: "gemini", modelId: "claude-opus-4-6" });
+  assert.match(rightHalf(lines[3]), /^Claude .* 100%/, "Gemini's Claude allowance");
+});
+
+test("providers without a usage endpoint say so rather than showing Codex", () => {
+  const lines = renderUsageLines(mixed, theme, 100, { provider: "xai", modelId: "grok-5" });
+  assert.match(rightHalf(lines[0]), /^Grok \u00b7 usage not reported/);
+
+  const observed = { ...mixed, rows: [...mixed.rows, { group: "Kimi", label: "rate", remaining: 0, checkedAt: now, resetAt: now + 60_000 }] };
+  const kimi = renderUsageLines(observed, theme, 100, { provider: "kimi-coding", modelId: "k2" });
+  assert.match(rightHalf(kimi[0]), /^Kimi/);
+  assert.match(rightHalf(kimi[1]), /^rate .* 0%/);
+});
+
+test("with no Codex figures the default column is Gemini's", () => {
+  const noCodex = { ...mixed, rows: [...rows, ...geminiRows] };
+  const lines = renderUsageLines(noCodex, theme, 100, { provider: "anthropic", modelId: "claude-opus-5-5" });
+  assert.match(rightHalf(lines[0]), /^Gemini/);
+});
+
 test("a row without checkedAt is never fresh", () => {
   // Regression: cached rows built from a stored snapshot omitted checkedAt,
   // so isFresh rejected every one and the whole HUD read "unknown/stale".

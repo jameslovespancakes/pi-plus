@@ -1,6 +1,14 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { readStoredCredential, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { refreshUsage, startPolling, stopPolling, subscribe, usageState } from "../../services/usage-service.ts";
+import { isGeminiAccount } from "../../core/quota/pool.ts";
+import {
+  configureUsageSources,
+  refreshUsage,
+  startPolling,
+  stopPolling,
+  subscribe,
+  usageState,
+} from "../../services/usage-service.ts";
 import { renderUsageLines, usageSummaryText } from "../../ui/usage-bars.ts";
 import { formatTokens, sanitize } from "../../ui/format.ts";
 
@@ -48,7 +56,23 @@ function usageSignature(entries: any[]): string {
   return [entries.length, last?.id, usage?.input, usage?.output, usage?.cacheRead, usage?.cacheWrite, usage?.cost?.total].join(":");
 }
 
+/**
+ * True when the column the footer shows for `provider` has nothing to draw
+ * yet, e.g. right after a first `/login gemini`. Waiting for the next poll
+ * would leave the swapped-in column empty for minutes.
+ */
+function columnIsEmpty(provider: string | undefined): boolean {
+  const rows = usageState().rows;
+  if (provider === "gemini") return !rows.some(isGeminiAccount);
+  if (provider === "openai-codex") return !rows.some((row) => row.group === "Codex");
+  return false;
+}
+
 export function registerFooter(pi: ExtensionAPI): void {
+  // The primary account's quota must be read from pi's store as-is; the
+  // registry would hand back whichever pooled account routing picked.
+  configureUsageSources({ readCredential: (providerId) => readStoredCredential(providerId) });
+
   let showUsage = true;
   let requestRender: (() => void) | undefined;
   let unsubscribe: (() => void) | undefined;
@@ -137,12 +161,8 @@ export function registerFooter(pi: ExtensionAPI): void {
           }
 
           if (showUsage) {
-            lines.push(...renderUsageLines(
-              usageState(),
-              theme,
-              width,
-              model?.provider === "anthropic" ? model.id : undefined,
-            ));
+            // The right-hand column follows the provider in use.
+            lines.push(...renderUsageLines(usageState(), theme, width, { provider: model?.provider, modelId: model?.id }));
           }
 
           // Final safety net: never emit a line wider than the terminal.
@@ -159,9 +179,11 @@ export function registerFooter(pi: ExtensionAPI): void {
     startPolling(ctx);
   });
 
-  pi.on("model_select", async (_event, ctx) => {
+  pi.on("model_select", async (event, ctx) => {
     apply(ctx);
     requestRender?.();
+    // The swap itself is immediate; fetch only if the new column has no figures.
+    if (ctx.hasUI && showUsage && columnIsEmpty(event.model?.provider)) void refreshUsage(ctx, true);
   });
 
   pi.on("agent_settled", async (_event, ctx) => {

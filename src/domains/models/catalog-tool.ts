@@ -13,6 +13,8 @@ import {
   refreshQuality,
 } from "../../core/catalog/quality.ts";
 import { ensureFresh, usageState } from "../../services/usage-service.ts";
+import { geminiQuotaFamily } from "../../core/gemini/quota.ts";
+import { combinedWindow, isGeminiAccount, pooledWindow } from "../../core/quota/pool.ts";
 import { env, isFromProcessEnv, maskSecret, setEnv } from "../../core/env.ts";
 import { fitId } from "../../ui/format.ts";
 
@@ -53,14 +55,24 @@ interface Entry {
   efficiency: { intelligencePerDollar?: number; codingPerDollar?: number; agenticPerDollar?: number };
 }
 
-function quotaFor(provider: string): number | undefined {
-  const rows = usageState().rows;
-  const match = provider === "anthropic"
-    ? rows.find((row) => row.group.includes("pool") && row.label === "5h")
-      ?? rows.find((row) => row.group.startsWith("Claude ") && row.label === "5h")
-    : provider === "openai-codex"
-      ? rows.find((row) => row.group === "Codex" && row.label === "weekly")
-      : undefined;
+function quotaFor(provider: string, modelId: string): number | undefined {
+  const state = usageState();
+  const rows = state.rows;
+  if (provider === "anthropic") {
+    // The pool's figure, not whichever account happens to be listed first.
+    const pool = combinedWindow(rows, "5h", state.accounts, Date.now(), true);
+    return pool ? Math.round(pool.remaining) : undefined;
+  }
+  if (provider === "gemini") {
+    // Gemini pools per model family, so the figure depends on the model.
+    const family = geminiQuotaFamily(modelId);
+    const expected = state.geminiAccounts || new Set(rows.filter(isGeminiAccount).map((row) => row.group)).size;
+    const pool = family ? pooledWindow(rows, family, expected, isGeminiAccount, Date.now(), true) : undefined;
+    return pool ? Math.round(pool.remaining) : undefined;
+  }
+  const match = provider === "openai-codex"
+    ? rows.find((row) => row.group === "Codex" && row.label === "weekly")
+    : undefined;
   return match ? Math.round(match.remaining) : undefined;
 }
 
@@ -76,7 +88,7 @@ function buildEntry(model: any): Entry {
     id: `${model.provider}/${model.id}`,
     provider: model.provider,
     billing: SUBSCRIPTION_PROVIDERS.has(model.provider) ? "subscription" : "metered",
-    quotaLeftPercent: quotaFor(model.provider),
+    quotaLeftPercent: quotaFor(model.provider, model.id),
     contextWindow: model.contextWindow,
     maxTokens: model.maxTokens,
     reasoning: !!model.reasoning,

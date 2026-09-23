@@ -1,6 +1,6 @@
 import { agentPath, readJson, writeJson } from "../core/store.ts";
-import { isClaudeAccount, type UsageRow } from "../core/quota/pool.ts";
-import { fetchAll } from "../core/quota/usage-source.ts";
+import { isClaudeAccount, isGeminiAccount, type UsageRow } from "../core/quota/pool.ts";
+import { fetchAll, type SourceOptions } from "../core/quota/usage-source.ts";
 
 /** Shared subscription-usage cache and poller. */
 
@@ -14,14 +14,23 @@ export interface UsageState {
   errors: string[];
   updatedAt?: number;
   loading: boolean;
+  /** Claude accounts expected to report. */
   accounts: number;
+  /** Gemini accounts expected to report. */
+  geminiAccounts?: number;
   codexPlan?: string;
   /** Last observed quota drop for each account group. */
   lastUsedAt?: Record<string, number>;
 }
 
-const state: UsageState = { rows: [], errors: [], loading: true, accounts: 0, lastUsedAt: {} };
+const state: UsageState = { rows: [], errors: [], loading: true, accounts: 0, geminiAccounts: 0, lastUsedAt: {} };
 const listeners = new Set<() => void>();
+let sourceOptions: SourceOptions = {};
+
+/** Supplies host services the sources need, such as pi's credential reader. */
+export function configureUsageSources(options: SourceOptions): void {
+  sourceOptions = { ...sourceOptions, ...options };
+}
 
 let nextAllowedFetch = 0;
 let inFlight: Promise<void> | undefined;
@@ -39,6 +48,7 @@ function loadCache(): void {
   if (Date.now() - cached.updatedAt > CACHE_MAX_AGE_MS) return;
   state.rows = cached.rows.filter((row) => !row.group.startsWith("Claude pool ×"));
   state.accounts = cached.accounts ?? 0;
+  state.geminiAccounts = cached.geminiAccounts ?? 0;
   state.codexPlan = cached.codexPlan;
   state.updatedAt = cached.updatedAt;
   state.lastUsedAt = cached.lastUsedAt ?? {};
@@ -49,6 +59,7 @@ function saveCache(): void {
   writeJson(cachePath(), {
     rows: state.rows,
     accounts: state.accounts,
+    geminiAccounts: state.geminiAccounts,
     codexPlan: state.codexPlan,
     updatedAt: state.updatedAt,
     lastUsedAt: state.lastUsedAt,
@@ -107,20 +118,24 @@ export async function refreshUsage(ctx: any, force = false): Promise<void> {
 
   inFlight = (async () => {
     try {
-      const result = await fetchAll(ctx);
+      const result = await fetchAll(ctx, sourceOptions);
       const rateLimited = result.errors.some((error) => error.includes("429"));
       recordUsageDrops(result.rows);
 
-      // Per-account merge: groups that failed this cycle keep their last figures.
+      // Per-account merge: accounts that failed this cycle keep their last
+      // figures, marked stale. Removed accounts and header-observed readings
+      // (which lapse by design) are not kept.
       const freshGroups = new Set(result.rows.map((row) => row.group));
+      const expected = new Set([...result.groups, ...result.geminiGroups]);
       const retained = state.rows
         .filter((row) => !row.group.startsWith("Claude pool ×")
           && !freshGroups.has(row.group)
-          && (!isClaudeAccount(row) || result.groups.includes(row.group)))
+          && (isClaudeAccount(row) || isGeminiAccount(row) ? expected.has(row.group) : row.group === "Codex"))
         .map((row) => ({ ...row, stale: true }));
 
       state.rows = [...result.rows, ...retained];
       state.accounts = result.groups.length;
+      state.geminiAccounts = result.geminiGroups.length;
       state.updatedAt = Date.now(); // poll time only; rows retain their own checkedAt
       state.errors = result.errors;
       if (result.codexPlan !== undefined) state.codexPlan = result.codexPlan;

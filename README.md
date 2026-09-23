@@ -73,6 +73,14 @@ Your live quota, always in the footer:
 With more than two accounts only the two most recently used are listed, so the
 footer stays a fixed height however many you pool.
 
+The right-hand column follows the model in use. It shows Codex by default and
+swaps to Gemini while a `gemini/*` model is selected: one bar per quota family
+(Flash, Pro, and Claude or GPT-OSS), pooled across your Gemini accounts, with
+the active family highlighted. Whether a family resets weekly or every five
+hours depends on the account's plan; the reset time shows which. Kimi and Grok
+publish no usage endpoint, so their column shows only the last rate-limit
+reading, if any.
+
 Account and routing commands are provider-agnostic. Sequential routing uses
 account order; quota-aware routing uses reported capacity and fairly probes
 accounts whose provider does not publish quota headers.

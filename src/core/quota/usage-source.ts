@@ -1,13 +1,19 @@
-import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { loadOAuthPool, saveOAuthAccount, sharedOAuthPoolStore, type PooledOAuthAccount } from "../accounts/oauth-pool.ts";
+import { refreshAbortSignal, type AccountQuotaState } from "../accounts/routing.ts";
+import { anthropicAccountIdentity, cachedAnthropicAccountIdentity } from "../anthropic/identity.ts";
 import { loadAccounts, saveAccount, type Account as AnthropicAccount } from "../anthropic/store.ts";
 import { refreshToken } from "../anthropic/oauth.ts";
-import { loadCodexAccounts } from "../codex/store.ts";
-import type { UsageRow } from "./pool.ts";
+import { claimsOf } from "../codex/store.ts";
+import { fetchUserQuota } from "../gemini/client.ts";
+import { credentialEmail } from "../gemini/credentials.ts";
+import { geminiOAuth, requestProjectId } from "../gemini/oauth.ts";
+import { summarizeGeminiQuota } from "../gemini/quota.ts";
+import { agentPath, readJson } from "../store.ts";
+import { CLAUDE_FRESH_MS, OBSERVED_PROVIDERS, type UsageRow } from "./pool.ts";
 
 /**
- * Fetches subscription quota from the Claude and Codex endpoints.
+ * Fetches subscription quota from the Claude, Codex and Gemini endpoints, and
+ * reports what response headers showed for providers with no usage endpoint.
  *
  * Pure data access: no pi imports, no module-level mutable state, no rendering.
  * Everything here returns values so it can be tested without a live agent.
@@ -19,9 +25,66 @@ const TIMEOUT_MS = 10_000;
 export interface SourceResult {
   rows: UsageRow[];
   errors: string[];
+  /** Claude account groups expected to report. */
   groups: string[];
+  /** Gemini account groups expected to report. */
+  geminiGroups: string[];
   codexPlan?: string;
 }
+
+/** Reads a provider's credential as pi stores it (pi's `readStoredCredential`). */
+export type CredentialReader = (providerId: string) => unknown;
+
+export interface SourceOptions {
+  /**
+   * How the primary (pi-owned) credential is read. It must be read as stored:
+   * `modelRegistry.getProviderAuth()` returns whatever account *routing*
+   * picked, which can be a pooled one, so figures labelled as the primary
+   * account could silently belong to another.
+   */
+  readCredential?: CredentialReader;
+}
+
+/** Fallback when pi's reader was not supplied: the same file pi reads. */
+function readAuthFile(providerId: string): unknown {
+  return readJson<Record<string, unknown>>(agentPath("auth.json"), {})[providerId];
+}
+
+interface StoredOAuth {
+  type: "oauth";
+  access: string;
+  refresh: string;
+  expires: number;
+  [key: string]: unknown;
+}
+
+function usableOAuth(value: unknown, now = Date.now()): value is StoredOAuth {
+  const credential = value as Partial<StoredOAuth> | undefined;
+  return credential?.type === "oauth"
+    && typeof credential.access === "string" && credential.access.length > 0
+    && (typeof credential.expires !== "number" || credential.expires > now + 60_000);
+}
+
+/**
+ * The provider's primary OAuth credential, or undefined when pi holds none
+ * (not logged in, or an API key, which has no subscription quota).
+ *
+ * An expiring credential is refreshed by pi itself (`getProviderAuth`
+ * refreshes and persists before it routes) and then read back, so rotating
+ * refresh tokens are only ever spent by pi.
+ */
+async function primaryOAuth(ctx: any, providerId: string, read: CredentialReader): Promise<StoredOAuth | undefined> {
+  const stored = read(providerId) as { type?: unknown } | undefined;
+  if (stored?.type !== "oauth") return undefined;
+  if (usableOAuth(stored)) return stored;
+
+  await ctx?.modelRegistry?.getProviderAuth?.(providerId);
+  const refreshed = read(providerId);
+  if (usableOAuth(refreshed)) return refreshed;
+  throw new Error(`login expired, run /login ${providerId}`);
+}
+
+const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 function pct(value: unknown): number | undefined {
   if (value == null || typeof value === "boolean" || (typeof value === "string" && !value.trim())) return undefined;
@@ -60,14 +123,16 @@ async function claudeUsage(group: string, token: string): Promise<{ rows: UsageR
   };
   push("5h", body.five_hour);
   push("7d", body.seven_day);
-  push("7d Opus", body.seven_day_opus ?? body.seven_day_omelette);
-  push("7d Sonnet", body.seven_day_sonnet);
+  // Scoped labels are lower case in every source (the stored snapshot keeps
+  // lower-cased ids), or one limit pools as two half-reported windows.
+  push("7d opus", body.seven_day_opus ?? body.seven_day_omelette);
+  push("7d sonnet", body.seven_day_sonnet);
 
   for (const limit of Array.isArray(body.limits) ? body.limits : []) {
     const scoped = limit?.scope?.model?.display_name;
     const used = pct(limit?.percent);
-    if (!scoped || used === undefined) continue;
-    const label = `7d ${scoped}`;
+    if (typeof scoped !== "string" || !scoped || used === undefined) continue;
+    const label = `7d ${scoped.toLowerCase()}`;
     if (rows.some((row) => row.label === label)) continue;
     rows.push({ group, label, remaining: 100 - used, resetAt: resetToMs(limit?.resets_at) });
   }
@@ -131,33 +196,59 @@ function rowsFromSnapshot(group: string, quota: any): UsageRow[] | undefined {
   push("5h", quota.five_hour);
   push("7d", quota.seven_day);
   for (const scoped of Array.isArray(quota.scoped) ? quota.scoped : []) {
-    if (typeof scoped?.remainingPercent !== "number" || !scoped?.id) continue;
-    push(`7d ${scoped.id}`, scoped);
+    if (typeof scoped?.remainingPercent !== "number" || typeof scoped?.id !== "string" || !scoped.id) continue;
+    // Snapshots written before the fix restate the 5h/7d windows as "scoped".
+    if (scoped.id === "scoped") continue;
+    push(`7d ${scoped.id.toLowerCase()}`, scoped);
   }
   return rows.length ? rows : undefined;
 }
 
-export async function fetchClaudeRows(ctx: any): Promise<{ rows: UsageRow[]; errors: string[]; groups: string[] }> {
+const claudeGroup = (account: AnthropicAccount) => `Claude ${account.label ?? account.id.slice(0, 8)}`;
+
+export async function fetchClaudeRows(
+  ctx: any,
+  options: SourceOptions = {},
+): Promise<{ rows: UsageRow[]; errors: string[]; groups: string[] }> {
+  const read = options.readCredential ?? readAuthFile;
   const rows: UsageRow[] = [];
   const errors: string[] = [];
   const accounts: Array<{ group: string; token?: string; account?: AnthropicAccount }> = [];
+  const groups = new Set<string>();
 
+  let sidecars: AnthropicAccount[] = [];
   try {
-    const token = (await ctx.modelRegistry.getProviderAuth("anthropic"))?.auth?.apiKey;
-    if (token) accounts.push({ group: "Claude Personal", token });
-    else errors.push("Claude Personal: not logged in");
+    sidecars = (loadAccounts()?.accounts ?? []).filter((account) => account.type === "oauth" && account.enabled !== false);
   } catch (error) {
-    errors.push(`Claude Personal: ${error instanceof Error ? error.message : String(error)}`);
+    errors.push(`Claude accounts: ${errorText(error)}`);
   }
+  const taken = new Set(sidecars.map(claudeGroup));
+  const primaryGroup = taken.has("Claude Personal") ? "Claude Primary" : "Claude Personal";
 
   try {
-    const storage = loadAccounts();
-    for (const account of storage?.accounts ?? []) {
-      if (account.type !== "oauth" || account.enabled === false) continue;
-      accounts.push({ group: `Claude ${account.label ?? account.id.slice(0, 8)}`, account });
+    const primary = await primaryOAuth(ctx, "anthropic", read);
+    if (!primary) {
+      errors.push(`${primaryGroup}: not logged in`);
+    } else {
+      // pi's own login is often the same Claude account as a pooled one.
+      // Counting it twice filed every window twice and marked the pool partial.
+      const identity = cachedAnthropicAccountIdentity(primary.access)
+        ?? await anthropicAccountIdentity(primary.access).catch(() => undefined);
+      const twin = identity ? sidecars.find((account) => account.identity === identity) : undefined;
+      if (!twin) {
+        accounts.push({ group: primaryGroup, token: primary.access });
+        groups.add(primaryGroup);
+      }
     }
   } catch (error) {
-    errors.push(`Claude accounts: ${error instanceof Error ? error.message : String(error)}`);
+    // Logged in but unreadable: still an account the pool expects.
+    groups.add(primaryGroup);
+    errors.push(`${primaryGroup}: ${errorText(error)}`);
+  }
+
+  for (const account of sidecars) {
+    accounts.push({ group: claudeGroup(account), account });
+    groups.add(claudeGroup(account));
   }
 
   for (const entry of accounts) {
@@ -185,35 +276,30 @@ export async function fetchClaudeRows(ctx: any): Promise<{ rows: UsageRow[]; err
     }
   }
 
-  return { rows, errors, groups: [...new Set(["Claude Personal", ...accounts.map((entry) => entry.group)])] };
+  return { rows, errors, groups: [...groups] };
 }
 
-function codexAccountId(): string | undefined {
-  // Prefer an enabled account from our own pool, so /usage reflects the
-  // accounts /accounts manages rather than only pi's single credential.
-  try {
-    const pooled = loadCodexAccounts().accounts.find((a) => a.enabled !== false && a.accountId);
-    if (pooled?.accountId) return pooled.accountId;
-  } catch { /* fall through */ }
-  try {
-    const auth = JSON.parse(readFileSync(join(homedir(), ".pi", "agent", "auth.json"), "utf8"));
-    const credential = auth["openai-codex"];
-    if (credential?.accountId) return credential.accountId;
-    if (credential?.account_id) return credential.account_id;
-  } catch { /* fall through */ }
-  try {
-    const codex = JSON.parse(readFileSync(join(homedir(), ".codex", "auth.json"), "utf8"));
-    return codex?.tokens?.account_id ?? codex?.tokens?.accountId;
-  } catch {
-    return undefined;
+/**
+ * The ChatGPT account the token belongs to. It must come from the same
+ * credential: an id taken from a pooled account while the token is pi's
+ * primary asks the endpoint about one account on behalf of another.
+ */
+function codexAccountId(credential: StoredOAuth): string | undefined {
+  for (const value of [credential.accountId, credential.account_id, claimsOf(credential.access).accountId]) {
+    if (typeof value === "string" && value) return value;
   }
+  return undefined;
 }
 
-export async function fetchCodexRows(ctx: any): Promise<{ rows: UsageRow[]; error?: string; plan?: string }> {
+export async function fetchCodexRows(
+  ctx: any,
+  options: SourceOptions = {},
+): Promise<{ rows: UsageRow[]; error?: string; plan?: string }> {
   try {
-    const token = (await ctx.modelRegistry.getProviderAuth("openai-codex"))?.auth?.apiKey;
-    const accountId = codexAccountId();
-    if (!token) return { rows: [], error: "Codex: not logged in" };
+    const primary = await primaryOAuth(ctx, "openai-codex", options.readCredential ?? readAuthFile);
+    if (!primary) return { rows: [], error: "Codex: not logged in" };
+    const token = primary.access;
+    const accountId = codexAccountId(primary);
     if (!accountId) return { rows: [], error: "Codex: no ChatGPT account id" };
 
     const response = await fetch("https://chatgpt.com/backend-api/wham/usage", {
@@ -277,13 +363,150 @@ export async function fetchCodexRows(ctx: any): Promise<{ rows: UsageRow[]; erro
   }
 }
 
-/** One full poll of every configured subscription source. */
-export async function fetchAll(ctx: any): Promise<SourceResult> {
-  const [claude, codex] = await Promise.all([fetchClaudeRows(ctx), fetchCodexRows(ctx)]);
+const GEMINI = "gemini";
+const GEMINI_PRIMARY_GROUP = "Gemini Primary";
+
+/** A pooled Gemini account with a live token, refreshed and saved if it had lapsed. */
+async function freshGeminiAccount(account: PooledOAuthAccount): Promise<PooledOAuthAccount> {
+  if (account.expires > Date.now() + 60_000) return account;
+  // Google does not rotate refresh tokens on use, so a refresh racing the
+  // serving path's own is harmless: both tokens stay valid.
+  const credential = await geminiOAuth.refresh(account, refreshAbortSignal());
+  const updated = { ...account, ...credential };
+  saveOAuthAccount(GEMINI, updated);
+  return updated;
+}
+
+/**
+ * Gemini quota per account from `retrieveUserQuota`, one row per model
+ * family (Flash, Pro, Claude, GPT). Silent when no Gemini account exists.
+ */
+export async function fetchGeminiRows(
+  ctx: any,
+  options: SourceOptions = {},
+): Promise<{ rows: UsageRow[]; errors: string[]; groups: string[] }> {
+  const errors: string[] = [];
+  const accounts: Array<{ group: string; credential?: StoredOAuth; account?: PooledOAuthAccount }> = [];
+  const groups: string[] = [];
+  const emails = new Set<string>();
+
+  try {
+    const primary = await primaryOAuth(ctx, GEMINI, options.readCredential ?? readAuthFile);
+    if (primary) {
+      accounts.push({ group: GEMINI_PRIMARY_GROUP, credential: primary });
+      const email = credentialEmail(primary as any);
+      if (email) emails.add(email.toLowerCase());
+    }
+  } catch (error) {
+    groups.push(GEMINI_PRIMARY_GROUP);
+    errors.push(`${GEMINI_PRIMARY_GROUP}: ${errorText(error)}`);
+  }
+
+  try {
+    for (const account of loadOAuthPool(GEMINI).accounts) {
+      if (account.enabled === false || !account.access) continue;
+      // The same Google account signed in twice has one allowance, not two.
+      const email = credentialEmail(account)?.toLowerCase();
+      if (email && emails.has(email)) continue;
+      if (email) emails.add(email);
+      let group = `Gemini ${account.label || email || account.id.slice(0, 8)}`;
+      if (accounts.some((entry) => entry.group === group)) group = `${group} ${account.id.slice(0, 4)}`;
+      accounts.push({ group, account });
+    }
+  } catch (error) {
+    errors.push(`Gemini accounts: ${errorText(error)}`);
+  }
+
+  const results = await Promise.all(accounts.map(async (entry): Promise<{ rows: UsageRow[]; error?: string }> => {
+    try {
+      const credential = entry.account ? await freshGeminiAccount(entry.account) : entry.credential!;
+      const buckets = await fetchUserQuota(
+        credential.access,
+        requestProjectId(credential as any),
+        AbortSignal.timeout(TIMEOUT_MS),
+      );
+      const checkedAt = Date.now();
+      const rows = summarizeGeminiQuota(buckets).map((family): UsageRow => ({
+        group: entry.group,
+        label: family.family,
+        remaining: family.remaining,
+        resetAt: family.resetAt,
+        checkedAt,
+      }));
+      return rows.length ? { rows } : { rows, error: `${entry.group}: quota unavailable` };
+    } catch (error) {
+      const message = errorText(error);
+      return {
+        rows: [],
+        error: /invalid_grant/i.test(message)
+          ? `${entry.group}: login expired, run ${entry.account
+            ? `/accounts reauth gemini ${entry.account.label || entry.account.id}`
+            : "/login gemini"}`
+          : `${entry.group}: ${message}`,
+      };
+    }
+  }));
+
   return {
-    rows: [...claude.rows, ...codex.rows],
-    errors: [...claude.errors, codex.error].filter((error): error is string => !!error),
+    rows: results.flatMap((result) => result.rows),
+    errors: [...errors, ...results.flatMap((result) => result.error ?? [])],
+    groups: [...groups, ...accounts.map((entry) => entry.group)],
+  };
+}
+
+function observedRemaining(quota: AccountQuotaState, now: number): number | undefined {
+  // A 429 reading means nothing once its block has cleared.
+  if (quota.blockedUntil !== undefined) return quota.blockedUntil > now ? 0 : undefined;
+  return quota.remainingPercent;
+}
+
+/**
+ * What response headers last said for providers without a usage endpoint:
+ * the account routing can still use most. A rate-limit reading, not a
+ * subscription allowance, so it is labelled "rate" and dropped once old.
+ */
+export function observedRows(now = Date.now()): UsageRow[] {
+  return OBSERVED_PROVIDERS.flatMap(([providerId, group]): UsageRow[] => {
+    let quotas: AccountQuotaState[] = [];
+    try {
+      const store = sharedOAuthPoolStore(providerId);
+      quotas = [
+        store.primaryQuota(),
+        ...store.load().accounts.filter((account) => account.enabled !== false).map((account) => account.quota),
+      ].filter((quota): quota is AccountQuotaState => !!quota);
+    } catch {
+      return [];
+    }
+
+    const current = quotas.filter((quota) => observedRemaining(quota, now) !== undefined
+      && ((quota.blockedUntil ?? 0) > now || now - quota.checkedAt < CLAUDE_FRESH_MS));
+    if (current.length === 0) return [];
+    const best = current.reduce((left, right) =>
+      observedRemaining(right, now)! > observedRemaining(left, now)! ? right : left);
+    const blocked = (best.blockedUntil ?? 0) > now;
+    return [{
+      group,
+      label: "rate",
+      remaining: observedRemaining(best, now)!,
+      resetAt: blocked ? best.blockedUntil : best.resetAt,
+      // A live block stays current until it clears, however old the reading.
+      checkedAt: blocked ? now : best.checkedAt,
+    }];
+  });
+}
+
+/** One full poll of every configured subscription source. */
+export async function fetchAll(ctx: any, options: SourceOptions = {}): Promise<SourceResult> {
+  const [claude, codex, gemini] = await Promise.all([
+    fetchClaudeRows(ctx, options),
+    fetchCodexRows(ctx, options),
+    fetchGeminiRows(ctx, options),
+  ]);
+  return {
+    rows: [...claude.rows, ...codex.rows, ...gemini.rows, ...observedRows()],
+    errors: [...claude.errors, codex.error, ...gemini.errors].filter((error): error is string => !!error),
     groups: claude.groups,
+    geminiGroups: gemini.groups,
     codexPlan: codex.plan,
   };
 }

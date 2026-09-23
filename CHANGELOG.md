@@ -8,6 +8,30 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+### Added
+
+- Gemini usage bars. The footer's right-hand column swaps from Codex to Gemini
+  while a `gemini/*` model is selected, with one bar per quota family (Flash,
+  Pro, and Claude or GPT-OSS) read from `retrieveUserQuota` and pooled across
+  Gemini accounts. `/usage text` lists each account's families, and
+  `list_models` reports quota for Gemini models. Kimi and Grok, which have no
+  usage endpoint, show their last observed rate-limit reading instead of
+  Codex's bars.
+
+### Fixed
+
+- The primary account's usage was fetched with whatever credential routing
+  picked, so "Claude Personal" could show a pooled account's figures (and the
+  poll itself moved Anthropic's routing state). Primary credentials are now
+  read from pi's store as-is; pi still refreshes them when they expire.
+- pi's own Claude login was counted a second time when it was also a pooled
+  account, filing every window twice and marking the pooled bars partial.
+- Stored Claude snapshots filed the 5h and 7d windows again as a scoped
+  "7d scoped" limit, because `limits` restates them with no scope; the Fable
+  limit was also split in two by label case.
+- The Codex usage request could pair pi's token with a pooled account's
+  ChatGPT account id. Both now come from the same credential.
+
 ## [1.0.17] - 2026-09-22
 
 ### Fixed

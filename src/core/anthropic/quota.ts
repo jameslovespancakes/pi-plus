@@ -61,12 +61,16 @@ export function parseQuota(body: any, now = Date.now()): QuotaSnapshot {
     };
   };
 
+  // `limits` also restates the session and weekly windows (`kind: session`,
+  // `weekly_all`) with no scope. Only model-scoped entries are extra limits;
+  // keeping the others filed the 5h and 7d windows a second time as "scoped".
   const scoped = (Array.isArray(body?.limits) ? body.limits : [])
     .map((limit: any) => {
+      const name = limit?.scope?.model?.display_name;
       const used = pct(limit?.percent);
-      if (used === undefined) return undefined;
+      if (typeof name !== "string" || !name || used === undefined) return undefined;
       return {
-        id: String(limit?.scope?.model?.display_name ?? limit?.id ?? "scoped").toLowerCase(),
+        id: name.toLowerCase(),
         usedPercent: used,
         remainingPercent: 100 - used,
         resetsAt: typeof limit?.resets_at === "string" ? limit.resets_at : undefined,

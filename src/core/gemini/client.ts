@@ -154,6 +154,45 @@ export async function fetchUserEmail(token: string, signal?: AbortSignal): Promi
   }
 }
 
+/** One `retrieveUserQuota` bucket: a runtime model's remaining share of its window. */
+export interface QuotaBucket {
+  modelId: string;
+  /** 0..1 of the window left. */
+  remainingFraction: number;
+  /** ISO time the window resets; absent for buckets with no window. */
+  resetTime?: string;
+}
+
+/**
+ * The account's quota, one bucket per runtime model id. Endpoints are tried in
+ * order and the first answer wins: quota is per account, not per endpoint.
+ * Throws only when no endpoint answered at all.
+ */
+export async function fetchUserQuota(
+  token: string,
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<QuotaBucket[]> {
+  for (const endpoint of GEMINI_ENDPOINTS) {
+    const answer = await postJson(endpoint, "retrieveUserQuota", token, { project: projectId }, signal);
+    if (!isRecord(answer)) continue;
+    const buckets = Array.isArray(answer.buckets) ? answer.buckets : [];
+    return buckets.flatMap((bucket): QuotaBucket[] => {
+      if (!isRecord(bucket) || typeof bucket.modelId !== "string") return [];
+      // proto3 JSON omits zero values, so an exhausted bucket arrives with no
+      // `remainingFraction` at all. Absent means empty, not unknown.
+      const fraction = bucket.remainingFraction === undefined ? 0 : Number(bucket.remainingFraction);
+      if (!Number.isFinite(fraction)) return [];
+      return [{
+        modelId: bucket.modelId,
+        remainingFraction: Math.min(1, Math.max(0, fraction)),
+        ...(typeof bucket.resetTime === "string" && bucket.resetTime && { resetTime: bucket.resetTime }),
+      }];
+    });
+  }
+  throw new Error("Gemini did not return quota from any endpoint.");
+}
+
 /** One entry of `fetchAvailableModels`, keyed by its runtime model id. */
 export interface RuntimeModelInfo {
   isInternal?: boolean;
