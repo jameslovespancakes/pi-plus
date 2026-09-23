@@ -8,6 +8,8 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+## [1.0.19] - 2026-09-23
+
 ### Fixed
 
 - The Claude pool went to "unknown/stale" with 5h n/a whenever a window reset
@@ -379,7 +381,8 @@ First published release.
   truncated to `claude` and named neither the window nor the model. They now
   show the model family, for example `Fable`.
 
-[Unreleased]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.18...HEAD
+[Unreleased]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.19...HEAD
+[1.0.19]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.18...v1.0.19
 [1.0.18]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.17...v1.0.18
 [1.0.17]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.16...v1.0.17
 [1.0.16]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.15...v1.0.16
