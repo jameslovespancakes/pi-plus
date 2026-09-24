@@ -134,22 +134,22 @@ test("staleness is time based so startup costs at most one call a day", async ()
 });
 
 test("a discovered model inherits from the newest of its family", () => {
-  const merged = buildAnthropicModels([
-    { id: "claude-opus-5-5", displayName: "Claude Opus 5.5" },
-    { id: "claude-sonnet-9-9", displayName: "Claude Sonnet 9.9" },
-  ]);
-
-  const opus55 = merged.find((model) => model.id === "claude-opus-5-5")!;
-  const opus5 = merged.find((model) => model.id === "claude-opus-5")!;
-  assert.ok(opus55, "claude-opus-5-5 must be offered");
-  assert.equal(opus55.name, "Claude Opus 5.5");
-  // Inheriting beats guessing: limits and pricing track pi's newest Opus.
-  assert.equal(opus55.contextWindow, opus5.contextWindow);
-  assert.equal(opus55.maxTokens, opus5.maxTokens);
-  assert.deepEqual(opus55.cost, opus5.cost);
-
-  const sonnet = merged.find((model) => model.id === "claude-sonnet-9-9")!;
-  assert.equal(sonnet.cost.input, merged.find((m) => m.id === "claude-sonnet-5")!.cost.input);
+  const baseline = buildAnthropicModels([]);
+  for (const family of ["opus", "sonnet"]) {
+    // Synthetic IDs stay undiscovered as pi's real catalogue advances.
+    const id = `claude-${family}-999-999`;
+    assert.ok(!baseline.some((model) => model.id === id));
+    const template = baseline.filter((model) => new RegExp(`^claude-${family}-\\d+(?:-\\d{1,4})*$`).test(model.id))
+      .sort((a, b) => b.id.localeCompare(a.id, "en", { numeric: true }))[0];
+    assert.ok(template, `missing ${family} template`);
+    const discovered = buildAnthropicModels([{ id, displayName: "Future test model" }])
+      .find((model) => model.id === id)!;
+    assert.ok(discovered);
+    assert.equal(discovered.name, "Future test model");
+    assert.equal(discovered.contextWindow, template.contextWindow);
+    assert.equal(discovered.maxTokens, template.maxTokens);
+    assert.deepEqual(discovered.cost, template.cost);
+  }
 });
 
 test("discovery never drops or duplicates an existing model", () => {

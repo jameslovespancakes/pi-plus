@@ -1,9 +1,9 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { WorkflowProgressEvent } from "./types.ts";
 import type { AgentChatMessage, AgentChatRole, AgentRowStatus, WorkflowLaneItemStatus, WorkflowProgressSnapshot } from "./progress-types.ts";
-import { formatWorkflowUsageLine, type WorkflowUsageSnapshot } from "./usage.ts";
+import type { WorkflowUsageSnapshot } from "./usage.ts";
 import { unknownErrorMessage } from "./unknown-error.ts";
-import { statusTextFromCounts, type WorkflowStatusCounts } from "./ui/workflow-format.ts";
+import type { WorkflowStatusCounts } from "./ui/workflow-format.ts";
 import { toDisplayLine, toDisplayText } from "./ui/display-text.ts";
 import { renderWorkflowWidgetLines } from "./ui/workflow-widget.ts";
 
@@ -61,7 +61,7 @@ const WIDGET_REFRESH_INTERVAL_MS = 1_000;
 export const DEFAULT_LANE_ITEM_LIMIT = 200;
 
 /**
- * Tracks live workflow state for widgets, footer/status text, result renderers,
+ * Tracks live workflow state for widgets, result renderers,
  * and headless stderr breadcrumbs.
  */
 export class ProgressTracker {
@@ -81,17 +81,24 @@ export class ProgressTracker {
   private doneAt: number | undefined;
   private currentPhase = "Workflow";
   private nextAgentId = 1;
-  private lastStatusText: string | undefined;
   private usageSnapshot: WorkflowUsageSnapshot | undefined;
   private widgetRefreshInterval: ReturnType<typeof setInterval> | undefined;
   private readonly surfaceKey: string;
+  private readonly ctx: ExtensionContext;
+  private readonly title: string;
+  private readonly runId: string;
+  private readonly onSnapshot?: (snapshot: WorkflowProgressSnapshot) => void;
 
   constructor(
-    private readonly ctx: ExtensionContext,
-    private readonly title: string,
-    private readonly runId: string,
-    private readonly onSnapshot?: (snapshot: WorkflowProgressSnapshot) => void,
+    ctx: ExtensionContext,
+    title: string,
+    runId: string,
+    onSnapshot?: (snapshot: WorkflowProgressSnapshot) => void,
   ) {
+    this.ctx = ctx;
+    this.title = title;
+    this.runId = runId;
+    this.onSnapshot = onSnapshot;
     this.surfaceKey = `workflow:${runId}`;
     this.ensurePhase(this.currentPhase);
   }
@@ -336,7 +343,6 @@ export class ProgressTracker {
     if (!this.ctx.hasUI) return;
     this.publishWidget();
     this.startWidgetRefresh();
-    this.publishStatus();
   }
 
   private publishWidget(): void {
@@ -358,24 +364,6 @@ export class ProgressTracker {
     this.widgetRefreshInterval = undefined;
   }
 
-  private publishStatus(): void {
-    const status = statusTextFromCounts(
-      {
-        title: this.title,
-        doneAt: this.doneAt,
-        currentPhase: this.currentPhase,
-        counters: [...this.counters.values()].map((counter) => ({ ...counter })),
-      },
-      this.statusCountsSnapshot(),
-      this.ctx.ui.theme,
-    );
-    const usage = formatWorkflowUsageLine(this.usageSnapshot);
-    const next = usage ? `${status} · ${usage}` : status;
-    if (next === this.lastStatusText) return;
-    this.ctx.ui.setStatus(this.surfaceKey, next);
-    this.lastStatusText = next;
-  }
-
   /** Clear this run's live workflow surfaces. Final feedback is delivered by the result surface. */
   done(): void {
     this.doneAt = Date.now();
@@ -384,7 +372,6 @@ export class ProgressTracker {
     if (!this.ctx.hasUI) return;
     this.ctx.ui.setWidget(this.surfaceKey, undefined);
     this.ctx.ui.setStatus(this.surfaceKey, undefined);
-    this.lastStatusText = undefined;
   }
 
   private publishSnapshot(): void {

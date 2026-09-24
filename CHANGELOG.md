@@ -8,6 +8,32 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in `/claude-remote` connects a local pi session to the Claude app using
+  the CCR v2 protocol from `claude-remote-lib` and the behavior of
+  `pi-claude-remote`. Supports text input, queued follow-ups, stop, read-only
+  mirroring, and optional interactive-session auto-start. Uses pi's primary
+  Anthropic OAuth login and native locked refresh without inference account
+  rotation. Complete-message batching, bounded queues/retries, cancellation,
+  and no title-generation inference keep the bridge off the agent's hot path.
+
+### Changed
+
+- Remote Control uses a compact On/Off picker with the same icons and layout as
+  Providers, plus a green/red connection indicator beside Messaging Board.
+- Removed the verbose workflow footer status; progress and usage remain
+  available in the workflow board and results.
+- Reorganized the README around feature benefits with compact visuals, source
+  credits and a concise disclaimer.
+- Minimum documented pi version is 0.87.1; Claude Remote uses its public native
+  auth runtime rather than the removed AuthStorage API used by upstream.
+
+### Fixed
+
+- Catalog inheritance tests now use synthetic future models and the current
+  native catalog instead of assuming a real model is still undiscovered.
+
 ## [1.0.19] - 2026-09-23
 
 ### Fixed

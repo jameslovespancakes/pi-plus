@@ -39,7 +39,8 @@
       "./src/domains/models/index.ts",
       "./src/domains/workflows/index.ts",
       "./src/domains/agents/index.ts",
-      "./src/domains/remote/index.ts"
+      "./src/domains/remote/index.ts",
+      "./src/domains/claude-remote/index.ts"
     ],
     "skills": [
       "./config/skills"

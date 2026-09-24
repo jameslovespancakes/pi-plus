@@ -1,5 +1,6 @@
 import type { Component } from "@earendil-works/pi-tui";
 import { hasTruecolor, levelColor } from "../../ui/format.ts";
+import { frameSettings, settingsTheme } from "../../ui/settings-picker.ts";
 
 /**
  * The `/provider` picker.
@@ -79,50 +80,6 @@ function labelFor(theme: any, row: ProviderRow): string {
   return `${dot} ${name}`;
 }
 
-/**
- * The chrome pi uses for `/model` and its other in-chat pickers.
- *
- * Not a box: a full-width accent rule, a bold title, the body, then a closing
- * rule. Reproduced from pi's own `frame(theme, title, body, footer)` helper so
- * this reads as part of the chat flow rather than as a floating dialog.
- *
- * Input and mouse events pass straight through, so the frame is presentation
- * only and does not disturb the in-place updates.
- */
-function framed(theme: any, list: any, title: string): Component {
-  const rule = (width: number) => theme.fg("accent", "─".repeat(Math.max(1, width)));
-
-  return {
-    invalidate: () => list.invalidate?.(),
-    handleInput: (data: string) => list.handleInput(data),
-    handleMouse: (event: any) => list.handleMouse?.(event),
-    render(width: number): string[] {
-      const inner = Math.max(1, width);
-      // pi pads title and footer by one column; the list renders flush.
-      return [
-        rule(inner),
-        ` ${theme.fg("accent", theme.bold(title))}`,
-        ...list.render(inner),
-        rule(inner),
-      ];
-    },
-  } as Component;
-}
-
-/**
- * Theme for the picker. Every callback takes `selected` so the highlighted row
- * can be emphasised without the caller tracking cursor position.
- */
-function pickerTheme(theme: any) {
-  return {
-    label: (text: string, selected: boolean) => (selected ? theme.fg("accent", text) : text),
-    value: (text: string, _selected: boolean) => text,
-    description: (text: string) => theme.fg("dim", text),
-    cursor: theme.fg("accent", "›"),
-    hint: (text: string) => theme.fg("dim", text),
-  };
-}
-
 export interface PickerDeps {
   /** Re-reads the current rows, so the picker never shows stale state. */
   rows: () => Promise<ProviderRow[]>;
@@ -195,13 +152,13 @@ export async function openProviderPicker(ctx: any, deps: PickerDeps): Promise<vo
     list = new SettingsList(
       items,
       12,
-      pickerTheme(theme),
+      settingsTheme(theme),
       onChange,
       () => done(undefined),
       { enableSearch: false },
     );
 
-    return framed(theme, list, "Providers") as Component & { dispose?(): void };
+    return frameSettings(theme, list, "Providers") as Component & { dispose?(): void };
   });
   // No `overlay` option: the picker renders inline in the chat flow rather than
   // floating over it.

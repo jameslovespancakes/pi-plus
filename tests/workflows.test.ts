@@ -9,6 +9,8 @@ import { resolveWorkflowRunOptions } from "../src/domains/workflows/runtime/opti
 import { toDisplayLine, toDisplayText } from "../src/domains/workflows/runtime/ui/display-text.ts";
 import { WorkflowInspector } from "../src/domains/workflows/runtime/ui/workflow-inspector.ts";
 import { renderWorkflowWidgetLines } from "../src/domains/workflows/runtime/ui/workflow-widget.ts";
+import { ProgressTracker } from "../src/domains/workflows/runtime/progress.ts";
+import { WorkflowUsageRecorder } from "../src/domains/workflows/runtime/usage.ts";
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -61,6 +63,32 @@ test("workflow limits are opt-in", () => {
   assert.equal(limited.maxAgents, 8);
   assert.equal(limited.agentTimeoutMs, 5_000);
   assert.equal(limited.budget, 2_000);
+});
+
+test("workflow progress and usage stay available without a footer status line", () => {
+  const statuses: (string | undefined)[] = [];
+  const widgets: unknown[] = [];
+  const tracker = new ProgressTracker({
+    hasUI: true,
+    ui: {
+      theme: { fg: (_color: string, text: string) => text, bold: (text: string) => text },
+      setStatus: (_key: string, text: string | undefined) => statuses.push(text),
+      setWidget: (_key: string, widget: unknown) => widgets.push(widget),
+    },
+  } as any, "review", "footer-test");
+  const usage = new WorkflowUsageRecorder().snapshot();
+  try {
+    const id = tracker.agentQueued(undefined, "Review");
+    tracker.agentStart(undefined, "Review", id);
+    tracker.updateUsage(usage);
+    assert.deepEqual(statuses, []);
+    assert.ok(widgets.length > 0);
+    assert.equal(tracker.snapshot().usage, usage);
+    assert.equal(tracker.statusCounts().running, 1);
+  } finally {
+    tracker.done();
+  }
+  assert.deepEqual(statuses, [undefined]);
 });
 
 test("workflow widget is a compact agent board", () => {

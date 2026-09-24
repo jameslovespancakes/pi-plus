@@ -2,326 +2,195 @@
 
 <img src="images/pi-plus.svg" alt="pi-plus" width="160">
 
-**Everything [pi](https://pi.dev/) is missing, in one install.**
+**Remote control, shared subscriptions, and multi-agent tools for [pi](https://pi.dev/).**
 
 [![npm](https://img.shields.io/npm/v/@jameslovespancakes/pi-plus?color=%234D9ABF&label=npm)](https://www.npmjs.com/package/@jameslovespancakes/pi-plus)
 [![CI](https://github.com/jameslovespancakes/pi-plus/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/jameslovespancakes/pi-plus/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-MIT-F1BE58)](LICENSE)
-[![pi-package](https://img.shields.io/badge/pi--package-F09082)](https://pi.dev/packages)
 
 [Changelog](CHANGELOG.md) · [Releases](https://github.com/jameslovespancakes/pi-plus/releases)
 
 </div>
 
----
-
 ## Install
 
-Requires **pi 0.87.0 or newer**.
+Requires **pi 0.87.1+**.
 
 ```sh
-pi install npm:@jameslovespancakes/pi-plus           # npm
-pi install git:github.com/jameslovespancakes/pi-plus # git
-pi install /path/to/pi-plus                          # local checkout
+pi install npm:@jameslovespancakes/pi-plus
 ```
 
-Then run **`/pi-plus`**. It shows what is configured and what is not, and enter
-on any row starts that setup.
-
-```
-──────────────────────────────────────────────────────────
- pi-plus
-› ● Subscriptions   2 accounts · quota-aware
-  ● Model Information  catalogue cached
-  ● Providers       2 allowed · 4 need approval
-  ● Agent Board     not configured
-  ● Remote Workers  1 worker
-
-  Enter to set up · Esc to close
-──────────────────────────────────────────────────────────
-```
-
-`/pi-plus help` asks the model to explain the pack and what you are missing.
-Nothing else is required, every feature configures itself from within pi.
+Run **`/pi-plus`** to see your setup and configure each feature.
 
 ---
 
-## Features
+## Remote Control
 
-### Pool every subscription
+**Keep working from your phone.** Message your local pi session from the Claude
+app or [claude.ai/code](https://claude.ai/code). Prompts queue while pi is busy;
+the app's Stop button stops the agent. Your selected model still runs through pi.
 
-Add multiple Claude, ChatGPT/Codex, Gemini, Kimi Code, or xAI/Grok accounts.
-pi-plus keeps credentials separate, refreshes them safely, and supports
-sequential or quota-aware routing.
-
-```
-/accounts add anthropic work
-/accounts add gemini personal
-/routing quota-aware
-```
-
-Your live quota, always in the footer:
-
-```
-  Claude Σ2 · 2/2 ready                           Codex · pro
-  5h     █████████████████░░░░░░░░░   65% 1h     5h     ███████████████████████░░░   88% 57m
-  weekly ███████████████░░░░░░░░░░░   58% 3d     weekly ████████████████████████░░   93% 6d
-  Fable  ████████████░░░░░░░░░░░░░░  ~47% 3d
-  Work 72% · Personal 58%
+```text
+──────────────────────────────────────
+ Remote Control
+› ● Remote Control              On
+──────────────────────────────────────
 ```
 
-With more than two accounts only the two most recently used are listed, so the
-footer stays a fixed height however many you pool.
+**`/claude-remote`** toggles On/Off. On connects now and auto-starts in future
+interactive sessions; Off disconnects and disables auto-start. The footer dot
+is green when connected and red otherwise.
 
-The right-hand column follows the model in use. It shows Codex by default and
-swaps to Gemini while a `gemini/*` model is selected: one bar per quota family
-(Flash, Pro, and Claude or GPT-OSS), pooled across your Gemini accounts, with
-the active family highlighted. Whether a family resets weekly or every five
-hours depends on the account's plan; the reset time shows which. Kimi and Grok
-publish no usage endpoint, so their column shows only the last rate-limit
-reading, if any.
+Off by default. Requires your primary Anthropic OAuth login via `/login`.
+Experimental: text input and completed-message mirroring, not token streaming.
+Remote model changes and permission approvals are not supported.
 
-Account and routing commands are provider-agnostic. Sequential routing uses
-account order; quota-aware routing uses reported capacity and fairly probes
-accounts whose provider does not publish quota headers.
+**Privacy:** enabling uploads new messages, thinking, images, and tool
+arguments/results to Anthropic and lets that Claude account control your local
+agent. Past history and system prompts are not mirrored. Turning it off does
+not delete uploaded content. Set `PI_CLAUDE_REMOTE_ALLOW_INBOUND=0` for read-only;
+accounts requiring device verification can supply `CLAUDE_TRUSTED_DEVICE_TOKEN`.
 
-### Gemini on a Google account
+## Messaging Board
 
-pi keeps only the metered `google/*` API. pi-plus adds `gemini/*`, served by
-Google's Antigravity backend and pooled like every other subscription. The
-provider is ported from [`pi-antigravity`](https://github.com/Rahularya01/pi-antigravity).
-`/login` → **Gemini** signs in through the browser (callback on port 51121; on
-a headless machine, paste the callback URL when asked).
+**Keep agents coordinated across sessions and machines.** Shared project rooms,
+direct messages, live presence, and coordinator assignments let agents exchange
+progress without duplicating work.
 
-```
-/login gemini
-/accounts add gemini personal
-```
+```text
+ Messaging Board · Active
+ repo:project │ reviewer │ builder
 
-Models include Gemini 3.x Flash and 3.1 Pro, plus the Claude and GPT-OSS
-models the backend also serves; each thinking level routes to the backend's own
-runtime model. The list refreshes from your account, so newly enabled models
-appear without an update, and `/models-refresh` forces it.
+ reviewer   Tests pass. Ready for review.
+ builder    Picking up the next task.
 
-A quota-walled account is held out of routing until it resets, so the next
-request goes to another pooled account. `PI_GEMINI_PROJECT_ID` pins a Cloud
-project; most accounts need none.
-
-`gemini/*` is auto-approved because the subscription has already paid for it;
-the metered `google/*` still asks.
-
-### Pick models on evidence
-
-`list_models` puts the full **Artificial Analysis** benchmark set in front of the
-agent: intelligence, coding, Terminal-Bench, τ²-bench, GPQA, price, tok/s and
-score-per-dollar, *plus your remaining quota*.
-
-```
-model                         bill quota  intel   code tbHard  $/1M  tok/s code/$
-anthropic/claude-opus-5       sub   74%    71.2   76.4   42.1     -      -      -
-openai-codex/gpt-6-astra      sub   81%    69.8   74.1   39.6     -      -      -
-openrouter/glm-5              paid    -    64.3   68.9   31.2  0.62   88.4  111.1
+ Message >
 ```
 
-Cached locally and revalidated every 4h with an ETag, mirroring how pi refreshes
-its own model catalog.
+**`/board setup`** configures a local or SSH-hosted board server.
+**`/board`** opens the chat. Presence stays out of model context; only requested
+board data and actual messages are delivered.
 
-### Never get surprise-billed
+## Subscriptions
 
-Metered providers are gated **at the provider boundary**, not by prompt
-instructions, so it covers workflow subagents too. `/provider` shows every
-provider you have credentials for and toggles each one:
+**Use your available capacity instead of managing accounts by hand.** Pool
+multiple subscriptions, route by account order or remaining quota, and see
+usage in the footer. Supports Anthropic, OpenAI Codex, Gemini, Kimi Code, and xAI.
 
+```text
+ Claude Σ2 · 2/2 ready
+ 5h      █████████████░░░░░░░   65%
+ weekly  ███████████░░░░░░░░░   58%
+ Work 72% · Personal 58%
 ```
-──────────────────────────────────────────────────────────
+
+**`/accounts`** adds, reauthorizes, and toggles accounts.
+**`/routing quota-aware`** uses reported capacity; **`/routing sequential`**
+follows account order. **`/usage`** refreshes the bars.
+
+Quota visibility depends on the provider. Where no usage endpoint exists,
+pi-plus shows the last observed rate-limit reading rather than inventing one.
+
+## Model Information
+
+**Choose on evidence, not guesswork.** Compare Artificial Analysis benchmarks,
+price, speed, and remaining subscription quota in one catalog.
+
+```text
+ Benchmarks + price + speed + quota
+                  ↓
+        Better-informed selection
+```
+
+**`/model-info setup`** connects your benchmark key. **`/models`** opens the
+ranked catalog; the **`list_models`** tool gives agents the same information.
+
+## Provider Controls
+
+**Decide which providers may spend.** Gate metered providers at the request
+boundary, including workflow subagents—not just through prompt instructions.
+
+```text
+──────────────────────────────────────
  Providers
-› ● Anthropic      Allowed
-  ● OpenAI Codex   Allowed
-  ● OpenRouter     Needs Approval
-  ● Google         Needs Approval
-
-  Enter/Space to change · Esc to cancel
-──────────────────────────────────────────────────────────
+› ● Anthropic              Allowed
+  ● OpenRouter             Needs Approval
+──────────────────────────────────────
 ```
 
-### Run tests on real hardware
+**`/provider`** opens the picker. Enter or Space toggles access in place.
 
-`/remote setup` reads every connectable host in `~/.ssh/config` and lets you
-toggle which are eligible. No SSH config? It generates a dedicated key, shows
-the one line to run, and verifies.
+## Workflows
 
-```
-──────────────────────────────────────────────────────────
- Remote Workers
-› ● build-box      READY  CPU 4% MEM 12% GPU 0% · 0 jobs
-  ● gpu-node       READY  CPU 9% MEM 31% GPU 0% · 0 jobs
-  ● old-laptop     UNREACHABLE  connection timed out
+**Turn repeatable tasks into coordinated agent runs.** Built-in reviews,
+diagnostics, research, and refactoring workflows support parallel agents,
+worktree isolation, replay, background execution, and usage accounting.
 
-  Enter/Space to toggle · Esc to cancel
-──────────────────────────────────────────────────────────
+```text
+ Task → parallel agents → findings → result
 ```
 
-`remote_test` snapshots your working tree, admission-checks CPU/GPU/disk,
-reserves a slot, and **deletes the uploaded source the moment the run ends**,
-keeping only `test.log` and `result.json`. Cleanup runs on the worker, so it
-still happens if your laptop sleeps. Worker capacity is queried only by
-`remote_status` or `remote_test`; Pi Plus never injects SSH status into ordinary
-chat turns.
-
-### Coordinate multiple agents
-
-`agent_board` gives live presence, messaging, repo rooms and coordinator chains
-across every running pi agent. `/board` opens the messaging view:
-
-```
-╭────────────────────────────────────────────────────────╮
-│ Messaging Board  online  · 3 chats                     │
-│ 1 repo:pi-plus │ 2 reviewer │ 3 direct                 │
-│ ────────────────────────────────────────────────────── │
-│ reviewer   rebased onto main, tests green at a1b2c3d   │
-│ builder    picking up the parser, leaving lexer alone  │
-│ you        ack, I will take the CLI surface            │
-│ ────────────────────────────────────────────────────── │
-│ Message  > _                                           │
-│ enter send · tab next chat · esc close                 │
-╰────────────────────────────────────────────────────────╯
-```
-
-`/board setup` installs the server locally (pi starts it each session) or onto
-any Mac or Linux host over SSH, where launchd or systemd brings it back after a
-reboot. Board state is returned only when `agent_board` is called or a real
-board message is delivered; background presence snapshots are not added to
-model context.
-
-### Orchestrate repeatable workflows
-
-The built-in workflow engine runs named or inline multi-agent workflows with
-optional concurrency limits, replay, background runs, worktree isolation, progress,
-and usage accounting. `code-review`, `diagnose`, `perf-review`,
-`refactor-scout`, and `research` ship in this package—no external workflow
-package is installed.
-
-```
+```sh
 /workflow code-review HEAD~3
-/workflow research "Compare the current provider implementations"
+/workflow research "Compare the available approaches"
 ```
 
-The `workflow` tool exposes the same engine to the model. Runs have no agent,
-timeout, submission, or token-budget limit by default; set limits explicitly
-with workflow options when a task needs them.
+**`/workflow`** opens the running agent board. Limits on concurrency, agents,
+time, and output tokens are optional; set them when needed.
 
----
+## Remote Workers
 
-## Commands
+**Run tests and builds on the machine suited to them.** Snapshot your working
+tree to an SSH worker after checking CPU, memory, disk, and GPU capacity.
 
-| | |
-| --- | --- |
-| `/pi-plus` | status modal for every feature |
-| `/pi-plus help` | model explains the pack and what is missing |
-| `/accounts` | account hub: toggle, add, reauth, switch routing |
-| `/accounts add <provider> [label]` | add a subscription |
-| `/accounts reauth <provider> [label]` | reauthorize one |
-| `/routing sequential \| quota-aware` | account order, or remaining capacity |
-| `/usage [on\|off\|text]` | quota bars |
-| `/models [sort]` | ranked catalog |
-| `/model-info <id>` | every benchmark for one model |
-| `/model-info refresh` | force a benchmark refresh |
-| `/model-info setup` | add the Artificial Analysis key |
-| `/provider` | provider toggle picker |
-| `/provider approve \| remove <name>` | grant or revoke |
-| `/remote setup` | worker hub: toggle, add, rename, remove |
-| `/remote add \| rename \| remove` | jump to one step |
-| `/board` | live agent board UI |
-| `/board setup \| restart \| clear \| status` | manage the board server |
-| `/workflow` | open the running workflow agent board |
-| `/workflow <name> [args]` | run a bundled workflow |
+```text
+ Remote Workers
+› ● build-box    READY
+  ● gpu-node     READY
+  ● laptop       UNREACHABLE
+```
 
-**Tools available to the agent:** `workflow`, `list_models`, `agent_board`,
-`remote_status`, `remote_test`.
+**`/remote setup`** selects or adds workers. Agents use **`remote_status`** and
+**`remote_test`** to inspect capacity and execute commands. Uploaded source is
+removed after the run by default; logs and results are retained.
 
 ---
 
 ## Configuration
 
-Everything lives in one file, `~/.pi/agent/pi-plus.json`, created on first use:
+Feature preferences live in **`~/.pi/agent/pi-plus.json`**. Environment variables
+win over saved values. Credentials, account pools, and caches use separate
+stores; pi remains responsible for its own authentication and session state.
 
-```json
-{
-  "env":    { "ARTIFICIAL_ANALYSIS_API_KEY": "aa_…", "AGENT_BOARD_URL": "ws://…" },
-  "policy": { "autoApprove": [], "requireApproval": [], "deny": [] },
-  "remote": { "workers": [] }
-}
-```
-
-Real environment variables of the same name always win, so CI and shell
-overrides work unchanged. Older `model-quality-key.json`, `agent-board.json` and
-`remote-workers.json` are migrated automatically and left in place.
-
----
-
-## Architecture
-
-Layered by dependency direction, grouped by domain. Each domain owns its own
-commands, tools and widgets.
-
-```
-src/
-  core/       zero pi imports, pure and unit-testable
-              store · config · env · quota · catalog · policy · exec · accounts
-  services/   stateful singletons with lifecycle + subscribe()
-              usage-service, the single quota poller
-  ui/         dumb render primitives: format · usage-bars
-  domains/    one pi extension entry each
-              setup · subscriptions · models · workflows · agents · remote
-server/       agent board server
-config/       example settings and bundled skills
-```
+For local development:
 
 ```sh
-npm install && npm run verify   # lint + type check + tests
+pi install /path/to/pi-plus
+npm install && npm run verify
 ```
 
----
+## Sources & Credits
 
-## Built on
-
-pi-plus is a thin layer over other people's work.
-
-| project | what it does here | license |
-| --- | --- | --- |
-| [`pi`](https://pi.dev/) | the host agent and the entire extension API | MIT |
-| [`xxhash-wasm`](https://github.com/jungomi/xxhash-wasm) | vendored into `src/core/anthropic/vendor/` for the billing checksum | MIT |
-| [`pi-workflow-engine`](https://github.com/timbrinded/pi-workflow-engine) | embedded workflow runtime and built-in workflows | MIT |
-| [`pi-antigravity`](https://github.com/Rahularya01/pi-antigravity) | reference for the `gemini` provider: Antigravity OAuth, wire format, model routing and catalogue discovery | MIT |
-
-The workflow engine keeps its upstream license in
-[`src/domains/workflows/LICENSE.md`](src/domains/workflows/LICENSE.md).
-
-The `gemini` provider in `src/core/gemini/` is ported from `pi-antigravity`
-0.8.0 and adapted to pi-plus's pooled accounts and pi's own Google adapter; its
-upstream license is kept in [`src/core/gemini/LICENSE.md`](src/core/gemini/LICENSE.md).
-
-The Anthropic provider, OAuth, quota and routing were originally adopted from
-[`@cortexkit/pi-anthropic-auth`](https://github.com/cortexkit/anthropic-auth)
-(MIT) and have since been reimplemented in this repository.
-
-
-## License
-
-MIT
-
+| Project | Contribution |
+| --- | --- |
+| [pi](https://pi.dev/) | Host agent, extension API, session and authentication lifecycle |
+| [claude-remote-lib](https://github.com/clepdn/claude-remote-lib) | Remote Control protocol ([provenance & license](src/core/claude-remote/UPSTREAM.md)) |
+| [pi-claude-remote](https://github.com/clepdn/pi-claude-remote) | Behavior reference for the independently implemented remote adapter |
+| [pi-workflow-engine](https://github.com/timbrinded/pi-workflow-engine) | Embedded workflow runtime ([MIT](src/domains/workflows/LICENSE.md)) |
+| [pi-antigravity](https://github.com/Rahularya01/pi-antigravity) | Gemini provider reference ([MIT](src/core/gemini/LICENSE.md)) |
+| [pi-anthropic-auth](https://github.com/cortexkit/anthropic-auth) | Original subscription integration, since reimplemented (MIT) |
+| [xxhash-wasm](https://github.com/jungomi/xxhash-wasm) | Vendored billing checksum ([MIT](src/core/anthropic/vendor/xxhash-wasm.LICENSE.md)) |
+| [Artificial Analysis](https://artificialanalysis.ai/) | Model benchmark data |
 
 ## Disclaimer
 
-pi-plus is an unofficial, independent project. It is not affiliated with,
-endorsed by, or supported by Anthropic, OpenAI, pi, or any other provider
-named here.
+pi-plus is an unofficial, independent project—not affiliated with or endorsed by
+pi, Anthropic, OpenAI, or other providers. Remote Control uses an unofficial
+protocol that may change without notice.
 
-**You are responsible for using it within the terms of service of every
-provider you connect it to.** This tool manages credentials for accounts you
-already own and pools requests across them. Whether that is permitted, and
-whether a given account may be used for a given purpose, is governed by your
-agreement with that provider and not by this software. Review those terms
-before connecting an account, and keep in mind that they change.
+**You are responsible for complying with each provider's terms**, including
+subscription pooling and remote access. Review those terms before connecting
+accounts. Features that mirror sessions or run remote jobs send data to those
+services or machines.
 
-Provided as is, without warranty of any kind. See [LICENSE](LICENSE).
+Provided as is, without warranty. [MIT License](LICENSE).

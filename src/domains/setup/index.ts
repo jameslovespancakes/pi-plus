@@ -131,6 +131,17 @@ async function inspect(ctx: any): Promise<Feature[]> {
     open: "/remote setup",
   });
 
+  /* Claude app remote control (preference only; never connect from the hub). */
+  const claudeRemote = env("PI_CLAUDE_REMOTE") === "1";
+  features.push({
+    name: "Claude Remote",
+    ready: claudeRemote,
+    detail: claudeRemote ? "auto-start enabled for interactive sessions" : "opt-in Claude app mirror; requires Anthropic OAuth",
+    commands: ["/claude-remote", "/claude-remote on", "/claude-remote off"],
+    setup: "/claude-remote",
+    open: "/claude-remote",
+  });
+
   return features;
 }
 
@@ -166,7 +177,7 @@ function buildBrief(features: Feature[]): string {
     `Config file: ${configPath()}${existsSync(configPath()) ? "" : " (not created yet)"}`,
     "",
     "Write the reply yourself, in chat. Requirements:",
-    "1. One short sentence on what pi-plus is: four capabilities in one package.",
+    "1. One short sentence on what pi-plus is: extensions for subscriptions, models, workflows, and remote collaboration.",
     "2. A compact list of the capabilities, each with one line on what it does and the command to try. Mark which are already working.",
     pending.length > 0
       ? `3. Then a short 'Set these up next' section covering ONLY the ones marked NOT SET UP (${pending.map((f) => f.name).join(", ")}), each with the single command to run and one line on what it will ask for.`

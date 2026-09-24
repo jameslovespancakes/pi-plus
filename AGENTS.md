@@ -35,7 +35,7 @@ bench/           offline benchmarks; never shipped to the model
 `package.json` → `pi.extensions` is the authoritative load list:
 
 ```text
-setup · subscriptions · models · workflows · agents · remote
+setup · subscriptions · models · workflows · agents · remote · claude-remote
 ```
 
 **A path listed here that does not exist is a fatal load error.** Deleting a domain means deleting its entry, its tests, and its docs in the same change.

@@ -14,7 +14,10 @@ export type EnvKey =
   | "AGENT_BOARD_TOKEN"
   | "AGENT_BOARD_NAME"
   | "AGENT_BOARD_MODE"
-  | "AGENT_BOARD_SSH";
+  | "AGENT_BOARD_SSH"
+  | "PI_CLAUDE_REMOTE"
+  | "PI_CLAUDE_REMOTE_ALLOW_INBOUND"
+  | "CLAUDE_TRUSTED_DEVICE_TOKEN";
 
 export const ENV_KEYS: { key: EnvKey; label: string; secret: boolean }[] = [
   { key: "ARTIFICIAL_ANALYSIS_API_KEY", label: "Artificial Analysis API key", secret: true },
@@ -23,6 +26,9 @@ export const ENV_KEYS: { key: EnvKey; label: string; secret: boolean }[] = [
   { key: "AGENT_BOARD_NAME", label: "Agent board display name", secret: false },
   { key: "AGENT_BOARD_MODE", label: "Agent board deployment (local|remote|external)", secret: false },
   { key: "AGENT_BOARD_SSH", label: "Agent board SSH host, when remote", secret: false },
+  { key: "PI_CLAUDE_REMOTE", label: "Claude Remote auto-start (1|0)", secret: false },
+  { key: "PI_CLAUDE_REMOTE_ALLOW_INBOUND", label: "Claude Remote input (1|0)", secret: false },
+  { key: "CLAUDE_TRUSTED_DEVICE_TOKEN", label: "Claude trusted-device token (optional)", secret: true },
 ];
 
 /** Reads a setting: real environment first, then the config file. */
