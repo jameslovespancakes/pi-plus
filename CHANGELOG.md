@@ -8,6 +8,8 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+## [1.0.20] - 2026-09-24
+
 ### Added
 
 - Opt-in `/claude-remote` connects a local pi session to the Claude app using
@@ -407,7 +409,8 @@ First published release.
   truncated to `claude` and named neither the window nor the model. They now
   show the model family, for example `Fable`.
 
-[Unreleased]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.19...HEAD
+[Unreleased]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.20...HEAD
+[1.0.20]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.19...v1.0.20
 [1.0.19]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.18...v1.0.19
 [1.0.18]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.17...v1.0.18
 [1.0.17]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.16...v1.0.17
