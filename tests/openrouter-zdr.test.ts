@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { Type } from "typebox";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
-import { generateSummaryWithUsage, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { createAgentSession, DefaultResourceLoader, generateSummaryWithUsage, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { resetConfigCache } from "../src/core/config.ts";
 import { withOpenRouterZdr } from "../src/core/policy/openrouter.ts";
 import { registerPolicyGate } from "../src/domains/models/policy-gate.ts";
@@ -35,15 +35,17 @@ async function setup(t: any, auto = false) {
   const commands = new Map<string, any>();
   const providers = new Map<string, any>([["openrouter", native]]);
   const notices: string[] = [];
-  registerPolicyGate({
+  const pi: any = {
     on: (name: string, fn: Function) => handlers.set(name, fn),
     registerCommand: (name: string, command: any) => commands.set(name, command),
     registerProvider: (provider: any) => providers.set(provider.id, provider),
-  } as any);
+  };
+  registerPolicyGate(pi);
   const ctx: any = {
     hasUI: false, ui: { notify: (text: string) => notices.push(text) },
     modelRegistry: {
       getProvider: (id: string) => providers.get(id),
+      getRegisteredNativeProvider: (id: string) => providers.get(id),
       getAvailable: () => native.getModels(),
       getProviderAuthStatus: () => ({ configured: true }),
       getProviderDisplayName: () => "OpenRouter",
@@ -60,8 +62,14 @@ async function setup(t: any, auto = false) {
     resetConfigCache();
     rmSync(dir, { recursive: true, force: true });
   });
-  return { dir, provider: providers.get("openrouter"), notices,
+  return { dir, get provider() { return providers.get("openrouter"); }, notices,
     start: () => handlers.get("session_start")!({}, ctx),
+    makeLegacyGuard: () => { providers.get("openrouter")[Symbol.for("pi-plus.provider-policy")] = true; },
+    reload: async () => {
+      handlers.get("session_shutdown")!({}, ctx);
+      registerPolicyGate(pi);
+      await handlers.get("session_start")!({ reason: "reload" }, ctx);
+    },
     command: (args: string) => commands.get("provider").handler(args, ctx) };
 }
 
@@ -122,7 +130,7 @@ test("both native OpenRouter APIs and both streaming methods enforce ZDR without
 test("Off blocks, normal On preserves configured privacy and routing, and ZDR augments it", async (t) => {
   const h = await setup(t, true);
   const model = { ...chatModel, compat: { ...chatModel.compat, openRouterRouting: { zdr: true, only: ["test"], allow_fallbacks: true } } };
-  assert.throws(() => h.provider.streamSimple(model, context(), {}), /not approved/);
+  assert.throws(() => h.provider.streamSimple(model, context(), {}), /OpenRouter is Off/);
   await h.command("approve openrouter");
   for (const mode of ["normal", "zdr"]) {
     if (mode === "zdr") await h.command("zdr openrouter");
@@ -134,7 +142,7 @@ test("Off blocks, normal On preserves configured privacy and routing, and ZDR au
   await h.command("");
   assert.match(h.notices.at(-1)!, /\[on\].*OpenRouter: On \(ZDR\)/);
   await h.command("remove openrouter");
-  assert.throws(() => h.provider.streamSimple(model, context(), {}), /not approved/);
+  assert.throws(() => h.provider.streamSimple(model, context(), {}), /OpenRouter is Off/);
 });
 
 test("unavailable ZDR endpoints surface an error with no unrestricted retry", async (t) => {
@@ -144,10 +152,60 @@ test("unavailable ZDR endpoints surface an error with no unrestricted retry", as
     const server = transport(model.api, 404);
     const result = await finish(h.provider.streamSimple(model, context(), { apiKey: "test-key", fetch: server.fetch }));
     assert.equal(result.stopReason, "error");
-    assert.match(result.errorMessage, /No endpoints.*data policy/);
+    assert.ok(result.errorMessage.includes("No ZDR endpoint is available for this model. Choose another model to keep ZDR enabled."));
+    assert.doesNotMatch(result.errorMessage, /No endpoints found matching/);
     assert.equal(server.requests.length, 1);
     assert.equal((await server.requests[0].json()).provider.zdr, true);
   }
+});
+
+test("ZDR error wording is narrow, preserves HTTP semantics, and leaves native errors intact", async () => {
+  const friendly = "No ZDR endpoint is available for this model. Choose another model to keep ZDR enabled.";
+  for (const message of ["No endpoints found matching your data policy (ZDR).", "No endpoints found for ZDR.", "No endpoints found for zero data retention."]) {
+    const original = Response.json({ error: { code: 404, message }, request_id: "request-test" }, {
+      status: 404, statusText: "Not Found", headers: { "x-request-id": "request-test", "content-length": "999", "content-encoding": "gzip" },
+    });
+    const input = new Request("https://openrouter.ai/api/v1/chat/completions", { method: "POST", body: "{}" });
+    const init = { signal: new AbortController().signal };
+    const request = withOpenRouterZdr(chatModel, { fetch: async (actualInput, actualInit) => {
+      assert.equal(actualInput, input);
+      assert.equal(actualInit, init);
+      return original;
+    } });
+    const response = await request.options.fetch(input, init);
+    assert.equal(response.status, 404);
+    assert.equal(response.statusText, "Not Found");
+    assert.equal(response.headers.get("x-request-id"), "request-test");
+    assert.equal(response.headers.get("content-length"), null);
+    assert.equal(response.headers.get("content-encoding"), null);
+    assert.deepEqual(await response.json(), { error: { code: 404, message: friendly }, request_id: "request-test" });
+  }
+  for (const original of [
+    Response.json({ error: { message: "No endpoints found supporting tools" } }, { status: 404 }),
+    Response.json({ error: { message: "Unknown model" } }, { status: 404 }),
+    Response.json({ error: { message: "No endpoints found matching your data policy" } }, { status: 403 }),
+    Response.json({ error: { message: "Rate limited" } }, { status: 429, headers: { "retry-after": "30" } }),
+    new Response("not JSON", { status: 404 }),
+    Response.json({ error: null }, { status: 404 }),
+    success(chatModel.api),
+  ]) {
+    const request = withOpenRouterZdr(chatModel, { fetch: async () => original });
+    assert.equal(await request.options.fetch("https://openrouter.ai/api/v1/chat/completions"), original);
+    assert.equal(original.bodyUsed, false);
+  }
+  const failure = new Error("transport failed");
+  const request = withOpenRouterZdr(chatModel, { fetch: async () => { throw failure; } });
+  await assert.rejects(request.options.fetch("https://openrouter.ai/api/v1/chat/completions"), (error) => error === failure);
+});
+
+test("normal On does not relabel OpenRouter's routing errors as ZDR failures", async (t) => {
+  const h = await setup(t);
+  await h.command("approve openrouter");
+  const server = transport(chatModel.api, 404);
+  const result = await finish(h.provider.streamSimple(chatModel, context(), { apiKey: "test-key", fetch: server.fetch }));
+  assert.match(result.errorMessage, /No endpoints.*data policy/);
+  assert.doesNotMatch(result.errorMessage, /Choose another model to keep ZDR enabled/);
+  assert.equal(server.requests.length, 1);
 });
 
 test("payload hooks cannot remove ZDR and unsupported routes fail before transport", async (t) => {
@@ -159,14 +217,14 @@ test("payload hooks cannot remove ZDR and unsupported routes fail before transpo
     onPayload: (body: any) => ({ ...body, provider: { zdr: false } }),
   }));
   assert.equal(result.stopReason, "error");
-  assert.match(result.errorMessage, /blocked a request/);
+  assert.match(result.errorMessage, /ZDR was removed.*Nothing was sent/);
   assert.equal(server.requests.length, 0);
   for (const model of [
     { ...chatModel, api: "openai-responses" },
     { ...chatModel, baseUrl: "https://gateway.example/v1" },
-  ]) assert.throws(() => h.provider.streamSimple(model, context(), {}), /cannot enforce/);
+  ]) assert.throws(() => h.provider.streamSimple(model, context(), {}), /ZDR can't be enforced/);
   const request = withOpenRouterZdr(messagesModel);
-  await assert.rejects(request.options.onPayload({ input: [], instructions: "other API" }, messagesModel), /unsupported request payload/);
+  await assert.rejects(request.options.onPayload({ input: [], instructions: "other API" }, messagesModel), /couldn't verify this request/);
 });
 
 test("Messages routing is merged after caller instrumentation; normal On sends no extra ZDR flag", async (t) => {
@@ -224,6 +282,59 @@ test("workflow provider synchronization and native summarization retain the same
   await h.start();
   const blocked = await finish(child.streamSimple(chatModel, context(), { apiKey: "test-key", fetch: server.fetch }));
   assert.equal(blocked.stopReason, "error");
-  assert.match(blocked.errorMessage, /not approved/);
+  assert.match(blocked.errorMessage, /Provider access expired/);
   assert.equal(server.requests.length, 1, "session replacement revokes the old inherited grant before transport");
+});
+
+test("retired ZDR guards never silently revert to unrestricted auto-approval", async (t) => {
+  const h = await setup(t, true);
+  await h.command("zdr openrouter");
+  const stale = h.provider;
+  await h.start();
+  assert.throws(() => stale.streamSimple(chatModel, context(), {}), /Provider access expired/);
+  await h.command("zdr openrouter");
+  const server = transport(chatModel.api);
+  const result = await finish(h.provider.streamSimple(chatModel, context(), { apiKey: "test-key", fetch: server.fetch }));
+  assert.equal(result.stopReason, "stop", result.errorMessage);
+  assert.equal((await server.requests[0].json()).provider.zdr, true);
+});
+
+test("hot upgrades from v1.0.23 ask for a restart instead of falsely approving a stale guard", async (t) => {
+  const h = await setup(t);
+  h.makeLegacyGuard();
+  await h.reload();
+  for (const command of ["approve openrouter", "zdr openrouter", ""]) {
+    await h.command(command);
+    assert.match(h.notices.at(-1)!, /Restart pi once/);
+  }
+});
+
+test("native SDK reload connects both On and ZDR controls to the current request guard", async (t) => {
+  const h = await setup(t);
+  const runtime = await ModelRuntime.create({ authPath: join(h.dir, "auth.json"), modelsPath: null, modelsStorePath: join(h.dir, "models.json"), refreshOnCreate: false });
+  const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } });
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: h.dir, agentDir: h.dir, settingsManager, extensionFactories: [registerPolicyGate],
+    noExtensions: true, noSkills: true, noThemes: true, noPromptTemplates: true, noContextFiles: true,
+  });
+  await resourceLoader.reload();
+  const { session } = await createAgentSession({
+    cwd: h.dir, agentDir: h.dir, modelRuntime: runtime, model: chatModel, thinkingLevel: "off",
+    resourceLoader, settingsManager, sessionManager: SessionManager.inMemory(h.dir), tools: [],
+  });
+  t.after(() => session.dispose());
+  const errors: unknown[] = [];
+  await session.bindExtensions({ mode: "print", onError: (error) => errors.push(error) });
+  await session.prompt("/provider zdr openrouter");
+  const stale = runtime.getProvider("openrouter")!;
+  for (const command of ["approve", "zdr", "zdr"]) {
+    await session.reload();
+    await session.prompt(`/provider ${command} openrouter`);
+    const server = transport(chatModel.api);
+    const result = await runtime.streamSimple(chatModel, context(), { apiKey: "test-key", fetch: server.fetch }).result();
+    assert.equal(result.stopReason, "stop", result.errorMessage);
+    assert.equal((await server.requests[0].json()).provider?.zdr, command === "zdr" ? true : undefined);
+  }
+  assert.deepEqual(errors, []);
+  assert.throws(() => stale.streamSimple(chatModel, context(), {}), /session|expired/);
 });

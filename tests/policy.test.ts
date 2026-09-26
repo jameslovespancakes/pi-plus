@@ -47,7 +47,9 @@ test("requireApproval blocks until the provider is approved", async () => {
     const blocked = module.checkModel("openrouter", "glm-5");
     assert.equal(blocked.allowed, false);
     assert.equal(blocked.reason, "needs-approval");
-    assert.match(blocked.message, /\/provider approve openrouter/, "points at the current command name");
+    assert.equal(blocked.message, "OpenRouter is Off for this session. Open /provider and choose On or On (ZDR).");
+    assert.equal(module.checkModel("openrouter", "stealth/space-bunny-alpha").message, blocked.message, "free models must not be described as pay-per-token");
+    assert.equal(module.checkModel("xai", "model").message, "xai is Off for this session. Enable it in /provider.");
 
     module.approve("openrouter");
     assert.equal(module.checkModel("openrouter", "glm-5").allowed, true);

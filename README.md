@@ -143,6 +143,10 @@ rules. ZDR does not cover separately enabled search plugins or local session log
 Commands: `/provider approve openrouter`, `/provider zdr openrouter`, and
 `/provider remove openrouter`.
 
+If upgrading from v1.0.23, restart pi once rather than using `/reload` so its old
+provider guard is removed. Not every model has a ZDR endpoint; an unavailable
+ZDR route is different from OpenRouter being Off.
+
 ## Workflows
 
 **Turn repeatable tasks into coordinated agent runs.** Built-in reviews,

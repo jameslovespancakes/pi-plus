@@ -8,6 +8,18 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+### Fixed
+
+- Provider controls now replace retired request guards after `/reload`, so On
+  and On (ZDR) control the active request path instead of an abandoned gate.
+  Stale workflow guards fail closed, including under auto-approval policies.
+- Shorter provider and ZDR errors explain how to proceed without incorrectly
+  describing free OpenRouter models as pay-per-token. Unavailable ZDR routes now
+  say: "No ZDR endpoint is available for this model. Choose another model to keep
+  ZDR enabled." Other server errors and HTTP retry behavior are preserved.
+  Hot upgrades from v1.0.23
+  request a full restart to remove its unrecoverable legacy guard.
+
 ## [1.0.23] - 2026-09-26
 
 ### Changed

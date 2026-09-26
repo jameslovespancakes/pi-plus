@@ -1,3 +1,4 @@
+import type { Provider } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { gatedProviders, loadPolicy, ProviderPolicy } from "../../core/policy/policy.ts";
 import { withOpenRouterZdr } from "../../core/policy/openrouter.ts";
@@ -14,6 +15,10 @@ class ModelPolicyError extends Error {
 
 // A workflow child inherits the host's live guard, not a second unapproved gate.
 const POLICY_GUARD = Symbol.for("pi-plus.provider-policy");
+interface PolicyGuard {
+  base: Provider;
+  active: boolean;
+}
 
 /** Configured providers plus policy gates, re-read after authentication changes. */
 async function providerRows(ctx: any, policy: ProviderPolicy): Promise<ProviderRow[]> {
@@ -60,17 +65,30 @@ function cleanName(name: string): string {
 
 export function registerPolicyGate(pi: ExtensionAPI): void {
   const policy = new ProviderPolicy();
-  let wrapped = false;
+  const ownedGuards = new Set<PolicyGuard>();
+  let needsRestart = false;
+
+  const retireGuards = () => {
+    policy.reset();
+    for (const guard of ownedGuards) guard.active = false;
+    ownedGuards.clear();
+  };
 
   const wrapProviders = (ctx: any) => {
-    if (wrapped) return;
     // OpenRouter must be wrapped even when config auto-approves it: the picker
     // can still select ZDR (or Off) without changing the installed catalogue.
     for (const providerId of new Set([...gatedProviders(), "openrouter"])) {
-      const provider = ctx.modelRegistry.getProvider(providerId);
-      if (!provider || ctx.modelRegistry.getRegisteredNativeProvider?.(providerId)?.[POLICY_GUARD]) continue;
+      const previous: PolicyGuard | true | undefined = ctx.modelRegistry.getRegisteredNativeProvider?.(providerId)?.[POLICY_GUARD];
+      // v1.0.23 did not retain the wrapped provider. Do not discard unknown
+      // auth/compat wrappers trying to recover it during a hot upgrade.
+      if (previous === true) { needsRestart = true; continue; }
+      if (previous?.active) continue; // live guard inherited from a workflow parent
+      const provider = previous?.base ?? ctx.modelRegistry.getProvider(providerId);
+      if (!provider) continue;
+      const ownership: PolicyGuard = { base: provider, active: true };
 
       const guard = (model: any) => {
+        if (!ownership.active) throw new ModelPolicyError("Provider access expired after a session change. Open /provider to enable it again.");
         const decision = policy.checkModel(providerId, model?.id ?? "unknown");
         if (!decision.allowed) throw new ModelPolicyError(decision.message);
       };
@@ -85,21 +103,21 @@ export function registerPolicyGate(pi: ExtensionAPI): void {
       };
       const guarded = {
         ...provider,
-        [POLICY_GUARD]: true,
+        [POLICY_GUARD]: ownership,
         ...(provider.stream && { stream: wrapStream(provider.stream) }),
         ...(provider.streamSimple && { streamSimple: wrapStream(provider.streamSimple) }),
       };
       pi.registerProvider(guarded);
+      ownedGuards.add(ownership);
     }
-    wrapped = true;
   };
 
   pi.on("session_start", async (_event, ctx) => {
-    policy.reset();
+    retireGuards();
     loadPolicy();
     wrapProviders(ctx);
   });
-  pi.on("session_shutdown", () => { policy.reset(); });
+  pi.on("session_shutdown", retireGuards);
 
   pi.registerCommand("provider", {
     description: "Toggle providers (approve | remove <name>; zdr openrouter for ZDR-only routing)",
@@ -116,6 +134,10 @@ export function registerPolicyGate(pi: ExtensionAPI): void {
         .map((provider) => ({ value: `${action} ${provider}`, label: provider }));
     },
     handler: async (args, ctx) => {
+      if (needsRestart) {
+        ctx.ui.notify("Restart pi once to finish updating provider controls; /reload cannot update the old guard.", "warning");
+        return;
+      }
       const [action, ...rest] = args.trim().split(/\s+/).filter(Boolean);
       const name = rest.join(" ");
 

@@ -131,7 +131,7 @@ export class ProviderPolicy {
     const current = loadPolicy();
     const ref = `${provider}/${modelId}`;
     if (matchesAny(current.deny, ref) || matchesAny(current.deny, `${provider}/*`) || matchesAny(current.deny, provider)) {
-      return { allowed: false, reason: "denied", message: `${ref} is denied by model policy.` };
+      return { allowed: false, reason: "denied", message: `${ref} is blocked by your provider policy.` };
     }
     // Explicit OpenRouter Off must override even an auto-approve wildcard.
     const explicitOpenRouterMode = provider === "openrouter" && this.openRouterMode !== undefined;
@@ -140,9 +140,9 @@ export class ProviderPolicy {
     if (!this.isApproved(provider)) {
       return {
         allowed: false, reason: "needs-approval",
-        message: `${ref} is a metered (pay-per-token) model and is not approved in this session. `
-          + "Use a subscription model such as anthropic/* or openai-codex/*, or ask the user to run "
-          + `/provider approve ${provider}.`,
+        message: provider === "openrouter"
+          ? "OpenRouter is Off for this session. Open /provider and choose On or On (ZDR)."
+          : `${provider} is Off for this session. Enable it in /provider.`,
       };
     }
     return { allowed: true, reason: "approved" };
