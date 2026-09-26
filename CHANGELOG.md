@@ -8,6 +8,8 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+## [1.0.24] - 2026-09-26
+
 ### Fixed
 
 - Provider controls now replace retired request guards after `/reload`, so On
@@ -476,7 +478,8 @@ First published release.
   truncated to `claude` and named neither the window nor the model. They now
   show the model family, for example `Fable`.
 
-[Unreleased]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.23...HEAD
+[Unreleased]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.24...HEAD
+[1.0.24]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.23...v1.0.24
 [1.0.23]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.22...v1.0.23
 [1.0.22]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.21...v1.0.22
 [1.0.21]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.20...v1.0.21
