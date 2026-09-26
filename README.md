@@ -37,9 +37,10 @@ the app's Stop button stops the agent. Your selected model still runs through pi
 ──────────────────────────────────────
 ```
 
-**`/claude-remote`** toggles On/Off. On connects now and auto-starts in future
-interactive sessions; Off disconnects and disables auto-start. The footer dot
-is green when connected and red otherwise.
+**`/claude-remote`** toggles On/Off for this session only. Startup, new sessions,
+resumes, forks, and reloads always start Off; old auto-start preferences are
+ignored. Off disconnects immediately. The footer dot is green when connected
+and red otherwise.
 
 Off by default. Requires your primary Anthropic OAuth login via `/login`.
 Experimental: text input and completed-message mirroring, not token streaming.
@@ -124,11 +125,23 @@ boundary, including workflow subagents—not just through prompt instructions.
 ──────────────────────────────────────
  Providers
 › ● Anthropic              Allowed
-  ● OpenRouter             Needs Approval
+  ● OpenRouter             Off
 ──────────────────────────────────────
 ```
 
 **`/provider`** opens the picker. Enter or Space toggles access in place.
+OpenRouter cycles **Off → On → On (ZDR) → Off**. Grants are session-local;
+explicit policy denials stay locked. Other providers keep their existing toggles.
+
+**On (ZDR)** restricts OpenRouter inference to Zero Data Retention endpoints,
+including workflow agents and compaction. No eligible endpoint means an error,
+never a non-ZDR retry; fallback among ZDR endpoints is allowed. Native Chat
+Completions and Anthropic Messages routes are supported; unsupported APIs or
+custom endpoints fail closed. Ordinary On does not remove account-level privacy
+rules. ZDR does not cover separately enabled search plugins or local session logs.
+
+Commands: `/provider approve openrouter`, `/provider zdr openrouter`, and
+`/provider remove openrouter`.
 
 ## Workflows
 

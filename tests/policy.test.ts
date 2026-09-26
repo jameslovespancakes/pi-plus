@@ -4,18 +4,15 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-/**
- * model-policy keeps module-level state, so each case gets a fresh import with
- * PI_AGENT_DIR pointed at a throwaway directory. A cache-busting query string
- * forces a new module instance per scenario.
- */
+/** Each case gets an independent session policy and throwaway persistent config. */
 async function loadPolicyModule(policy: unknown) {
   const dir = mkdtempSync(join(tmpdir(), "pi-plus-policy-"));
   writeFileSync(join(dir, "pi-plus.json"), JSON.stringify({ policy }), "utf8");
   process.env.PI_AGENT_DIR = dir;
   const config = await import("../src/core/config.ts");
   config.resetConfigCache();
-  const module = await import(`../src/core/policy/policy.ts?case=${Math.random()}`);
+  const exports = await import("../src/core/policy/policy.ts");
+  const module: any = Object.assign(new exports.ProviderPolicy(), { loadPolicy: exports.loadPolicy, gatedProviders: exports.gatedProviders });
   return { module, dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
@@ -149,6 +146,66 @@ test("a missing config is created from defaults", async () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("OpenRouter cycles Off, On, ZDR, Off without persisting a grant", async () => {
+  const { module, dir, cleanup } = await loadPolicyModule(BASE);
+  try {
+    const before = readFileSync(join(dir, "pi-plus.json"), "utf8");
+    assert.equal(module.providerState("openrouter"), "blocked");
+    assert.equal(module.toggleProvider("openrouter"), "approved");
+    assert.equal(module.openRouterZdrRequired(), false);
+    assert.equal(module.toggleProvider("openrouter"), "zdr");
+    assert.equal(module.openRouterZdrRequired(), true);
+    assert.equal(module.checkModel("openrouter", "model").allowed, true);
+    assert.match(module.policySummary(), /openrouter \(ZDR\)/);
+    assert.equal(module.toggleProvider("openrouter"), "blocked");
+    assert.equal(module.openRouterZdrRequired(), false);
+    assert.equal(module.checkModel("openrouter", "model").allowed, false);
+    assert.equal(readFileSync(join(dir, "pi-plus.json"), "utf8"), before);
+    assert.equal(module.toggleProvider("xai"), "approved");
+    assert.equal(module.toggleProvider("xai"), "blocked", "other toggles remain binary");
+  } finally { cleanup(); }
+});
+
+test("explicit OpenRouter Off overrides auto-approval and normal On clears only the runtime ZDR choice", async () => {
+  const { module, cleanup } = await loadPolicyModule({ ...BASE, autoApprove: ["*/*"], requireApproval: [] });
+  try {
+    assert.equal(module.providerState("openrouter"), "auto");
+    assert.equal(module.toggleProvider("openrouter"), "zdr");
+    assert.equal(module.toggleProvider("openrouter"), "blocked");
+    assert.equal(module.checkModel("openrouter", "model").allowed, false);
+    module.approveOpenRouterZdr();
+    module.approve("openrouter");
+    assert.equal(module.providerState("openrouter"), "approved");
+    assert.equal(module.openRouterZdrRequired(), false);
+    module.approve("openrouter", -1);
+    assert.equal(module.checkModel("openrouter", "model").allowed, false);
+  } finally { cleanup(); }
+});
+
+test("provider grants and ZDR mode are isolated and reset between sessions", async () => {
+  const { module, cleanup } = await loadPolicyModule(BASE);
+  try {
+    const { ProviderPolicy } = await import("../src/core/policy/policy.ts");
+    const other = new ProviderPolicy();
+    module.approveOpenRouterZdr();
+    assert.equal(other.providerState("openrouter"), "blocked");
+    assert.equal(other.openRouterZdrRequired(), false);
+    module.reset();
+    assert.equal(module.providerState("openrouter"), "blocked");
+    assert.equal(module.openRouterZdrRequired(), false);
+  } finally { cleanup(); }
+});
+
+test("ZDR approval cannot override an explicit policy denial", async () => {
+  const { module, cleanup } = await loadPolicyModule({ ...BASE, deny: ["openrouter/*"] });
+  try {
+    module.approveOpenRouterZdr();
+    assert.equal(module.providerState("openrouter"), "denied");
+    assert.equal(module.toggleProvider("openrouter"), "denied");
+    assert.equal(module.checkModel("openrouter", "model").allowed, false);
+  } finally { cleanup(); }
 });
 
 test("policySummary renders without throwing", async () => {

@@ -94,7 +94,7 @@ async function inspect(ctx: any): Promise<Feature[]> {
     name: "Providers",
     ready: config.policy.requireApproval.length > 0,
     detail: `${config.policy.requireApproval.length} gated pattern(s), ${config.policy.autoApprove.length} auto-approved`,
-    commands: ["/provider", "/provider list", "/provider approve <name>"],
+    commands: ["/provider", "/provider approve <name>", "/provider zdr openrouter"],
     open: "/provider",
   });
 
@@ -131,12 +131,11 @@ async function inspect(ctx: any): Promise<Feature[]> {
     open: "/remote setup",
   });
 
-  /* Claude app remote control (preference only; never connect from the hub). */
-  const claudeRemote = env("PI_CLAUDE_REMOTE") === "1";
+  /* No persisted auto-start preference: connection is opted into per session. */
   features.push({
     name: "Claude Remote",
-    ready: claudeRemote,
-    detail: claudeRemote ? "auto-start enabled for interactive sessions" : "opt-in Claude app mirror; requires Anthropic OAuth",
+    ready: false,
+    detail: "session-only Claude app mirror; defaults Off; requires Anthropic OAuth",
     commands: ["/claude-remote", "/claude-remote on", "/claude-remote off"],
     setup: "/claude-remote",
     open: "/claude-remote",

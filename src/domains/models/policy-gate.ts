@@ -1,15 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import {
-  approve,
-  checkModel,
-  gatedProviders,
-  isApproved,
-  loadPolicy,
-  providerState,
-  revoke,
-  toggleProvider,
-} from "../../core/policy/policy.ts";
-import { openProviderPicker, STATE_TEXT, type ProviderRow, type StateKey } from "./provider-picker.ts";
+import { gatedProviders, loadPolicy, ProviderPolicy } from "../../core/policy/policy.ts";
+import { withOpenRouterZdr } from "../../core/policy/openrouter.ts";
+import { openProviderPicker, providerStateText, type ProviderRow } from "./provider-picker.ts";
 
 /**
  * Enforces the approval policy at the provider boundary, so it also covers
@@ -20,7 +12,11 @@ class ModelPolicyError extends Error {
   code = "MODEL_POLICY_BLOCKED";
 }
 
-async function providerRows(ctx: any): Promise<ProviderRow[]> {
+// A workflow child inherits the host's live guard, not a second unapproved gate.
+const POLICY_GUARD = Symbol.for("pi-plus.provider-policy");
+
+/** Configured providers plus policy gates, re-read after authentication changes. */
+async function providerRows(ctx: any, policy: ProviderPolicy): Promise<ProviderRow[]> {
   const ids = new Set<string>();
   try {
     for (const model of await ctx.modelRegistry.getAvailable()) ids.add(model.provider);
@@ -47,16 +43,11 @@ async function providerRows(ctx: any): Promise<ProviderRow[]> {
       id: provider,
       provider,
       display,
-      state: providerState(provider) as ProviderRow["state"],
+      state: policy.providerState(provider),
     };
   });
 }
 
-/**
- * Every provider the user actually has credentials for, plus any the policy
- * gates. Derived at call time so a newly authenticated provider shows up
- * without touching config.
- */
 /**
  * Providers are free to decorate their own name. The CortexKit package calls
  * itself "Anthropic (CortexKit OAuth)". The implementation detail is noise in a
@@ -68,57 +59,59 @@ function cleanName(name: string): string {
 
 
 export function registerPolicyGate(pi: ExtensionAPI): void {
+  const policy = new ProviderPolicy();
   let wrapped = false;
 
   const wrapProviders = (ctx: any) => {
     if (wrapped) return;
-    for (const providerId of gatedProviders()) {
+    // OpenRouter must be wrapped even when config auto-approves it: the picker
+    // can still select ZDR (or Off) without changing the installed catalogue.
+    for (const providerId of new Set([...gatedProviders(), "openrouter"])) {
       const provider = ctx.modelRegistry.getProvider(providerId);
-      if (!provider) continue;
+      if (!provider || ctx.modelRegistry.getRegisteredNativeProvider?.(providerId)?.[POLICY_GUARD]) continue;
 
       const guard = (model: any) => {
-        const decision = checkModel(providerId, model?.id ?? "unknown");
+        const decision = policy.checkModel(providerId, model?.id ?? "unknown");
         if (!decision.allowed) throw new ModelPolicyError(decision.message);
       };
 
-      const originalStream = provider.stream?.bind(provider);
-      const originalStreamSimple = provider.streamSimple?.bind(provider);
-
-      pi.registerProvider({
+      const wrapStream = (stream: any) => (model: any, context: any, options: any) => {
+        guard(model);
+        if (providerId === "openrouter" && policy.openRouterZdrRequired()) {
+          const request = withOpenRouterZdr(model, options);
+          return stream.call(provider, request.model, context, request.options);
+        }
+        return stream.call(provider, model, context, options);
+      };
+      const guarded = {
         ...provider,
-        ...(originalStream && {
-          stream: (model: any, ...rest: any[]) => {
-            guard(model);
-            return originalStream(model, ...rest);
-          },
-        }),
-        ...(originalStreamSimple && {
-          streamSimple: (model: any, ...rest: any[]) => {
-            guard(model);
-            return originalStreamSimple(model, ...rest);
-          },
-        }),
-      });
+        [POLICY_GUARD]: true,
+        ...(provider.stream && { stream: wrapStream(provider.stream) }),
+        ...(provider.streamSimple && { streamSimple: wrapStream(provider.streamSimple) }),
+      };
+      pi.registerProvider(guarded);
     }
     wrapped = true;
   };
 
   pi.on("session_start", async (_event, ctx) => {
+    policy.reset();
     loadPolicy();
     wrapProviders(ctx);
   });
+  pi.on("session_shutdown", () => { policy.reset(); });
 
   pi.registerCommand("provider", {
-    description: "Toggle which providers may be used (approve | remove <name>)",
+    description: "Toggle providers (approve | remove <name>; zdr openrouter for ZDR-only routing)",
     getArgumentCompletions: (prefix) => {
       const [action, name = ""] = prefix.split(/\s+/);
       if (!prefix.includes(" ")) {
-        return ["approve", "remove"]
+        return ["approve", "zdr", "remove"]
           .filter((option) => option.startsWith(action))
           .map((option) => ({ value: option, label: option }));
       }
-      if (action !== "approve" && action !== "remove") return [];
-      return gatedProviders()
+      if (action !== "approve" && action !== "remove" && action !== "zdr") return [];
+      return (action === "zdr" ? ["openrouter"] : [...new Set([...gatedProviders(), "openrouter"])])
         .filter((provider) => provider.startsWith(name))
         .map((provider) => ({ value: `${action} ${provider}`, label: provider }));
     },
@@ -126,43 +119,48 @@ export function registerPolicyGate(pi: ExtensionAPI): void {
       const [action, ...rest] = args.trim().split(/\s+/).filter(Boolean);
       const name = rest.join(" ");
 
-      if (action === "approve" || action === "remove") {
+      if (action === "approve" || action === "remove" || action === "zdr") {
         if (!name) {
           ctx.ui.notify(`Usage: /provider ${action} <provider>`, "warning");
           return;
         }
-        if (!gatedProviders().includes(name)) {
+        if (action === "zdr" && name !== "openrouter") {
+          ctx.ui.notify("ZDR mode is supported only for OpenRouter. Use: /provider zdr openrouter", "warning");
+          return;
+        }
+        if (name !== "openrouter" && !gatedProviders().includes(name)) {
           ctx.ui.notify(
             `“${name}” is not a gated provider. Gated: ${gatedProviders().join(", ") || "none"}`,
             "warning",
           );
           return;
         }
-        if (action === "approve") approve(name);
-        else revoke(name);
-        ctx.ui.notify(`${name} is now ${isApproved(name) ? "approved" : "blocked"}.`, "info");
+        if (action === "zdr") policy.approveOpenRouterZdr();
+        else if (action === "approve") policy.approve(name);
+        else policy.revoke(name);
+        ctx.ui.notify(`${name} is now ${providerStateText(name, policy.providerState(name))}.`, "info");
         return;
       }
 
       if (action) {
-        ctx.ui.notify(`Unknown action “${action}”. Use: /provider [approve|remove <name>]`, "warning");
+        ctx.ui.notify(`Unknown action “${action}”. Use: /provider [approve|remove <name>] or /provider zdr openrouter`, "warning");
         return;
       }
 
-      const rows = await providerRows(ctx);
+      const rows = await providerRows(ctx, policy);
 
       // Headless: plain text, no cursor to draw.
       if (!ctx.hasUI) {
         ctx.ui.notify(
-          rows.map((row) => `${row.state === "auto" || row.state === "approved" ? "[on] " : "[off]"} ${row.display}: ${STATE_TEXT[row.state]}`).join("\n"),
+          rows.map((row) => `${row.state === "blocked" || row.state === "denied" ? "[off]" : "[on] "} ${row.display}: ${providerStateText(row.provider, row.state)}`).join("\n"),
           "info",
         );
         return;
       }
 
       await openProviderPicker(ctx, {
-        rows: () => providerRows(ctx),
-        toggle: (provider) => toggleProvider(provider) as StateKey,
+        rows: () => providerRows(ctx, policy),
+        toggle: (provider) => policy.toggleProvider(provider),
       });
     },
   });

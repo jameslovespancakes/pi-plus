@@ -22,12 +22,22 @@ export const STATE_TEXT = {
   approved: "Approved",
   blocked: "Needs Approval",
   denied: "Denied",
+  zdr: "On (ZDR)",
 } as const;
 
 export type StateKey = keyof typeof STATE_TEXT;
 
-/** The two values SettingsList cycles between for a binary toggle. */
-export const TOGGLE_VALUES = [STATE_TEXT.auto, STATE_TEXT.blocked];
+export function providerToggleStates(provider: string): StateKey[] {
+  return provider === "openrouter" ? ["blocked", "approved", "zdr"] : ["auto", "blocked"];
+}
+
+export function providerStateText(provider: string, state: StateKey): string {
+  if (provider === "openrouter") {
+    if (state === "auto" || state === "approved") return "On";
+    if (state === "blocked") return "Off";
+  }
+  return STATE_TEXT[state];
+}
 
 export interface ProviderRow {
   /** Stable id used by SettingsList and by the toggle handler. */
@@ -52,6 +62,7 @@ const STATE_LEVEL: Record<StateKey, number> = {
   approved: 100,
   blocked: 45,
   denied: 0,
+  zdr: 100,
 };
 
 /** Fallback for terminals without truecolor. */
@@ -60,6 +71,7 @@ const STATE_THEME_COLOUR: Record<StateKey, string> = {
   approved: "success",
   blocked: "warning",
   denied: "error",
+  zdr: "success",
 };
 
 /**
@@ -120,13 +132,12 @@ export async function openProviderPicker(ctx: any, deps: PickerDeps): Promise<vo
     // `values` carries the COLOURED strings, not plain text. SettingsList shows
     // whichever it cycles to immediately, so pre-colouring them means the new
     // text arrives already in the right colour rather than flashing uncoloured.
-    const colouredToggle = [colourState(theme, "auto"), colourState(theme, "blocked")];
-
+    const valueFor = (row: ProviderRow, state = row.state) => colourState(theme, state, providerStateText(row.provider, state));
     const items = rows.map((row) => ({
       id: row.id,
       label: labelFor(theme, row),
-      values: [...colouredToggle],
-      currentValue: colourState(theme, row.state),
+      values: providerToggleStates(row.provider).map((state) => valueFor(row, state)),
+      currentValue: valueFor(row),
     }));
 
     // Synchronous throughout: label, dot and value all change in one render.
@@ -137,7 +148,7 @@ export async function openProviderPicker(ctx: any, deps: PickerDeps): Promise<vo
 
       if (row.state === "denied") {
         // Undo the value SettingsList optimistically cycled to.
-        list?.updateValue(id, colourState(theme, row.state));
+        list?.updateValue(id, valueFor(row));
         ctx.ui.notify(`${row.display} is denied in policy. Edit pi-plus.json to change that.`, "warning");
         return;
       }
@@ -145,7 +156,7 @@ export async function openProviderPicker(ctx: any, deps: PickerDeps): Promise<vo
       const next = deps.toggle(row.provider);
       row.state = next;
       item.label = labelFor(theme, row);
-      list?.updateValue(id, colourState(theme, next));
+      list?.updateValue(id, valueFor(row));
       list?.invalidate?.();
     };
 

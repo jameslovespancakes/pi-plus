@@ -5,8 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { registerClaudeRemote } from "../src/domains/claude-remote/index.ts";
 import { createTokenSource } from "../src/domains/claude-remote/auth.ts";
-import { resetConfigCache } from "../src/core/config.ts";
-import { env } from "../src/core/env.ts";
+import { readConfig, resetConfigCache, updateConfig } from "../src/core/config.ts";
 
 function setup(t: any) {
   const dir = mkdtempSync(join(tmpdir(), "pi-plus-claude-test-"));
@@ -92,7 +91,7 @@ test("default is inert: no bridge, credential resolution, context hooks or tools
   assert.equal(h.handlers.has("before_agent_start"), false);
 });
 
-test("on/off persists, asks consent and avoids duplicate connections", async (t) => {
+test("on/off is session-only, asks consent and avoids duplicate connections", async (t) => {
   const h = setup(t);
   h.confirm(false);
   await h.command("on");
@@ -101,9 +100,9 @@ test("on/off persists, asks consent and avoids duplicate connections", async (t)
   await h.command("on");
   await h.command("on");
   assert.equal(h.bridges.length, 1);
-  assert.equal(env("PI_CLAUDE_REMOTE"), "1");
+  assert.equal(readConfig().env.PI_CLAUDE_REMOTE, undefined);
   await h.command("off");
-  assert.equal(env("PI_CLAUDE_REMOTE"), "0");
+  assert.equal(readConfig().env.PI_CLAUDE_REMOTE, undefined);
   assert.equal(h.bridges[0].stopped, true);
   h.bridges[0].options.onText("stale");
   h.bridges[0].options.onInterrupt();
@@ -131,21 +130,77 @@ test("inbound queues busy follow-ups; count-based echo suppression handles repea
   assert.equal(h.aborts, 1);
 });
 
-test("auto-start only in TUI; off persists and shutdown makes old callbacks inert", async (t) => {
+test("every session start stays Off despite legacy preferences and invalidates old callbacks", async (t) => {
   const h = setup(t);
-  await h.command("on");
-  assert.equal(env("PI_CLAUDE_REMOTE"), "1");
-  h.ctx.mode = "rpc";
-  h.emit("session_start");
-  assert.equal(h.bridges.length, 1);
-  h.ctx.mode = "tui";
-  h.emit("session_start");
-  assert.equal(h.bridges.length, 2);
-  h.emit("session_shutdown");
-  h.bridges[1].options.onText("stale");
+  process.env.PI_CLAUDE_REMOTE = "1";
+  updateConfig((config) => { config.env.PI_CLAUDE_REMOTE = "1"; });
+  h.emit("session_start", { reason: "startup" });
+  assert.equal(h.bridges.length, 0);
+  assert.equal(h.tokenSources, 0);
+  for (const reason of ["startup", "reload", "new", "resume", "fork"]) {
+    await h.command("on");
+    const old = h.bridges.at(-1);
+    const count = h.bridges.length;
+    h.emit("session_start", { reason });
+    assert.equal(h.bridges.length, count, reason);
+    assert.equal(old.stopped, true);
+    old.options.onText("stale");
+    old.options.onInterrupt();
+    old.options.onConnect("stale");
+    assert.equal(h.statuses.get("claude-remote"), "error:● Remote Control Offline");
+  }
+  for (const mode of ["rpc", "json", "print"]) {
+    h.ctx.mode = mode;
+    const count = h.bridges.length;
+    h.emit("session_start");
+    assert.equal(h.bridges.length, count);
+  }
   assert.equal(h.sent.length, 0);
-  await h.command("off");
-  assert.equal(env("PI_CLAUDE_REMOTE"), "0");
+  assert.equal(h.aborts, 0);
+  assert.equal(readConfig().env.PI_CLAUDE_REMOTE, "1", "legacy preference is ignored, not rewritten");
+});
+
+test("enabling one extension session does not enable another", async (t) => {
+  const first = setup(t);
+  const second = setup(t);
+  await first.command("on");
+  second.emit("session_start");
+  assert.equal(first.bridges.length, 1);
+  assert.equal(second.bridges.length, 0);
+  assert.equal(second.tokenSources, 0);
+});
+
+test("session switch/fork stops the bridge before switching, even if navigation is cancelled", async (t) => {
+  const h = setup(t);
+  for (const event of ["session_before_switch", "session_before_fork"]) {
+    await h.command("on");
+    const old = h.bridges.at(-1);
+    h.emit(event);
+    assert.equal(old.stopped, true);
+    old.options.onText("too late");
+    old.options.onInterrupt();
+    assert.equal(h.sent.length, 0);
+    assert.equal(h.aborts, 0);
+  }
+});
+
+test("consent and picker callbacks from a replaced session cannot enable the new one", async (t) => {
+  const h = setup(t);
+  let confirm!: (value: boolean) => void;
+  h.ctx.ui.confirm = () => new Promise<boolean>((resolve) => { confirm = resolve; });
+  const pending = h.command("on");
+  h.emit("session_start", { reason: "new" });
+  confirm(true);
+  await pending;
+  assert.equal(h.bridges.length, 0);
+  h.ctx.ui.custom = async (factory: any) => {
+    const component = factory({}, h.ctx.ui.theme, {}, () => {});
+    h.emit("session_start", { reason: "resume" });
+    component.handleInput("\r");
+    assert.equal(h.bridges.length, 0);
+    assert.match(component.render(100).join("\n"), /Remote Control.*Off/);
+  };
+  await h.command("");
 });
 
 test("tree switch creates a new bridge and old failures cannot stop it", async (t) => {
@@ -182,12 +237,15 @@ test("menu is an in-place provider-style on/off toggle", async (t) => {
     component.handleInput("\r");
     assert.match(component.render(100).join("\n"), /●.*Remote Control.*On/);
     assert.equal(h.bridges.length, 1);
-    assert.equal(env("PI_CLAUDE_REMOTE"), "1");
+    assert.equal(readConfig().env.PI_CLAUDE_REMOTE, undefined);
     assert.equal(closed, false);
     component.handleInput(" ");
     assert.match(component.render(100).join("\n"), /●.*Remote Control.*Off/);
     assert.equal(h.bridges[0].stopped, true);
-    assert.equal(env("PI_CLAUDE_REMOTE"), "0");
+    assert.equal(readConfig().env.PI_CLAUDE_REMOTE, undefined);
+    component.handleInput("\r");
+    h.bridges.at(-1).options.onError("connection failed");
+    assert.match(component.render(100).join("\n"), /Remote Control.*Off/);
     component.handleInput("\u001b");
     assert.equal(closed, true);
   };

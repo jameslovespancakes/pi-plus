@@ -8,6 +8,21 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+### Changed
+
+- Remote Control is session-only and defaults Off on startup, new/resumed/forked
+  sessions, and reloads. Legacy auto-start preferences are ignored; stale bridge,
+  picker, and consent callbacks cannot enable a replacement session.
+- OpenRouter's provider toggle cycles Off → On → On (ZDR). ZDR-only routing
+  covers native Chat Completions and Anthropic Messages, including workflows and
+  compaction, with no unrestricted fallback. Unsupported routes fail closed.
+
+### Fixed
+
+- Workflow children now inherit native provider registrations as well as legacy
+  configs, preserving live auth and policy wrappers. Provider grants are isolated
+  per extension session and reset on session replacement or shutdown.
+
 ## [1.0.22] - 2026-09-26
 
 ### Fixed

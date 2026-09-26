@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { STATE_TEXT, TOGGLE_VALUES, colourState } from "../src/domains/models/provider-picker.ts";
+import { STATE_TEXT, providerToggleStates, providerStateText, colourState, openProviderPicker, type StateKey } from "../src/domains/models/provider-picker.ts";
 
 /**
  * Colour resolution depends on terminal capability, which `ui/format.ts` reads
@@ -34,6 +34,7 @@ test("each state has a distinct label", () => {
     approved: "Approved",
     blocked: "Needs Approval",
     denied: "Denied",
+    zdr: "On (ZDR)",
   });
 });
 
@@ -81,8 +82,37 @@ test("approved shares the allowed colour, distinguished by label", () => {
   assert.notEqual(STATE_TEXT.approved, STATE_TEXT.auto);
 });
 
-test("the toggle offers exactly two values", () => {
-  // SettingsList cycles `values`; a third would make Enter a rotation.
-  assert.equal(TOGGLE_VALUES.length, 2);
-  assert.deepEqual(TOGGLE_VALUES, [STATE_TEXT.auto, STATE_TEXT.blocked]);
+test("only OpenRouter offers the three-state privacy toggle", () => {
+  assert.deepEqual(providerToggleStates("anthropic"), ["auto", "blocked"]);
+  assert.deepEqual(providerToggleStates("openrouter").map((state) => providerStateText("openrouter", state)), ["Off", "On", "On (ZDR)"]);
+  assert.equal(providerStateText("openrouter", "auto"), "On");
+  assert.equal(providerStateText("openrouter", "denied"), "Denied");
+});
+
+test("OpenRouter cycles in place and policy-denied rows remain locked", async () => {
+  let state: StateKey = "blocked";
+  let toggles = 0;
+  for (const denied of [false, true]) {
+    await openProviderPicker({
+      ui: {
+        notify: () => {},
+        custom: async (factory: any) => {
+          const component = factory({}, recordingTheme(), {}, () => {});
+          if (denied) {
+            component.handleInput("\r");
+            assert.match(component.render(100).join("\n"), /Denied/);
+            assert.equal(toggles, 3);
+            return;
+          }
+          for (const label of ["Off", "On", "On (ZDR)", "Off"]) {
+            assert.ok(component.render(100).join("\n").includes(label));
+            if (toggles < 3) component.handleInput("\r");
+          }
+        },
+      },
+    }, {
+      rows: async () => [{ id: "openrouter", provider: "openrouter", display: "OpenRouter", state: denied ? "denied" : state }],
+      toggle: () => { toggles++; state = state === "blocked" ? "approved" : state === "approved" ? "zdr" : "blocked"; return state; },
+    });
+  }
 });

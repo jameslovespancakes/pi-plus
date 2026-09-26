@@ -2,7 +2,7 @@ import { basename } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { ClaudeRemoteBridge, type BridgeOptions } from "../../core/claude-remote/bridge.ts";
 import { mirrorMessage } from "../../core/claude-remote/protocol.ts";
-import { env, setEnv } from "../../core/env.ts";
+import { env } from "../../core/env.ts";
 import { createTokenSource } from "./auth.ts";
 import { remoteControlPicker } from "./picker.ts";
 
@@ -30,6 +30,7 @@ export function registerClaudeRemote(pi: ExtensionAPI, deps: RemoteDependencies 
   let enabled = false;
   let current: ExtensionContext | undefined;
   let generation = 0;
+  let sessionEpoch = 0;
   // Counts rather than a TTL: follow-ups can wait longer than 30 seconds.
   const echoes: string[] = [];
 
@@ -48,11 +49,17 @@ export function registerClaudeRemote(pi: ExtensionAPI, deps: RemoteDependencies 
   }
 
   function stop(): void {
+    enabled = false;
     ++generation;
     active?.stop();
     active = undefined;
     echoes.length = 0;
     setConnectionStatus("off");
+  }
+
+  function endSession(): void {
+    ++sessionEpoch;
+    stop();
   }
 
   function start(ctx: ExtensionContext): void {
@@ -61,6 +68,7 @@ export function registerClaudeRemote(pi: ExtensionAPI, deps: RemoteDependencies 
       return;
     }
     current = ctx;
+    enabled = true;
     const gen = ++generation;
     const title = `pi: ${pi.getSessionName() || basename(ctx.cwd) || "session"}`.slice(0, 100);
     setConnectionStatus("connecting");
@@ -115,14 +123,8 @@ export function registerClaudeRemote(pi: ExtensionAPI, deps: RemoteDependencies 
   }
 
   function setEnabled(next: boolean, ctx: ExtensionContext): boolean {
-    enabled = next;
-    const saved = setEnv("PI_CLAUDE_REMOTE", next ? "1" : "0");
     if (next) start(ctx);
     else stop();
-    if (!saved) notify(ctx, "Could not save preference; changed this session only.", true);
-    else if ((env("PI_CLAUDE_REMOTE") === "1") !== next) {
-      notify(ctx, "PI_CLAUDE_REMOTE overrides this preference after reload.", true);
-    }
     return enabled;
   }
 
@@ -132,28 +134,33 @@ export function registerClaudeRemote(pi: ExtensionAPI, deps: RemoteDependencies 
       .filter((value) => value.startsWith(prefix)).map((value) => ({ value, label: value })),
     handler: async (args, ctx) => {
       const action = args.trim().toLowerCase();
+      const session = sessionEpoch;
       if (!action && ctx.mode === "tui") {
         await ctx.ui.custom((_tui, theme, _keys, done) => remoteControlPicker(
-          theme, enabled, (next) => setEnabled(next, ctx), () => done(undefined),
+          theme, () => session === sessionEpoch && enabled,
+          (next) => session === sessionEpoch && setEnabled(next, ctx), () => done(undefined),
         ));
       } else if (action === "on" || action === "off") {
         if (action === "on" && ctx.hasUI && !enabled && !await ctx.ui.confirm("Enable Remote Control?",
-          "Share sessions with Anthropic and control pi from the Claude app. Auto-starts in interactive sessions.")) return;
+          "Share this session with Anthropic and control it from the Claude app. New sessions and reloads start Off.")) return;
+        if (session !== sessionEpoch) return;
         setEnabled(action === "on", ctx);
       } else notify(ctx, "Usage: /claude-remote [on|off]", true);
     },
   });
 
+  // Stop before pi changes the active session, including cancelled switches.
+  pi.on("session_before_switch", () => { endSession(); });
+  pi.on("session_before_fork", () => { endSession(); });
   pi.on("session_start", (_event, ctx) => {
-    stop();
+    endSession();
     current = ctx;
     setConnectionStatus("off");
-    enabled = env("PI_CLAUDE_REMOTE") === "1";
-    // Never spawn remote mirrors for workflow/SDK/print subagents by default.
-    if (ctx.mode === "tui" && enabled) start(ctx);
+    // Intentionally ignore legacy PI_CLAUDE_REMOTE preferences. Every session,
+    // including resumes, forks, reloads and workflow children, starts Off.
   });
   pi.on("session_shutdown", (_event, ctx) => {
-    stop();
+    endSession();
     if (ctx.hasUI) ctx.ui.setStatus("claude-remote", undefined);
     current = undefined;
   });

@@ -6,6 +6,7 @@ type HostProviderRegistry = Pick<
   | "getApiKeyForProvider"
   | "getProviderAuthStatus"
   | "getRegisteredProviderConfig"
+  | "getRegisteredNativeProvider"
   | "getRegisteredProviderIds"
   | "isUsingOAuth"
 >;
@@ -27,10 +28,14 @@ export async function synchronizeWorkflowModelRuntime(input: {
   }
 
   for (const providerId of hostProviderIds) {
+    const native = host.getRegisteredNativeProvider(providerId);
     const config = host.getRegisteredProviderConfig(providerId);
-    if (!config) continue;
+    if (!native && !config) continue;
     child.unregisterProvider(providerId);
-    child.registerProvider(providerId, config);
+    // Native registrations carry live auth/policy/stream wrappers. Copying only
+    // legacy config silently drops those guards in workflow child sessions.
+    if (native) child.registerNativeProvider(native);
+    else child.registerProvider(providerId, config!);
   }
 
   const selectedProvider = selectedModel?.provider;

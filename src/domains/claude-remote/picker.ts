@@ -5,11 +5,11 @@ import { frameSettings, settingsTheme } from "../../ui/settings-picker.ts";
 /** Same dot, colors and in-place SettingsList toggle as /provider. */
 export function remoteControlPicker(
   theme: any,
-  initial: boolean,
+  readEnabled: () => boolean,
   toggle: (enabled: boolean) => boolean,
   done: () => void,
 ): Component {
-  let enabled = initial;
+  let enabled = readEnabled();
   const color = (value: boolean, text: string) => hasTruecolor()
     ? levelColor(value ? 100 : 0)(text) : theme.fg(value ? "success" : "error", text);
   const label = () => `${color(enabled, "●")} Remote Control`;
@@ -19,13 +19,22 @@ export function remoteControlPicker(
     values: [color(true, "On"), color(false, "Off")],
   };
   const list = new SettingsList([item], 1, settingsTheme(theme), () => {
-    enabled = toggle(!enabled);
+    enabled = toggle(!readEnabled());
     item.label = label();
     list.updateValue(item.id, value());
   }, done, { enableSearch: false });
   const frame = frameSettings(theme, list, "Remote Control");
   return {
     ...frame,
+    render(width: number) {
+      const next = readEnabled();
+      if (next !== enabled) {
+        enabled = next;
+        item.label = label();
+        list.updateValue(item.id, value());
+      }
+      return frame.render(width);
+    },
     invalidate() {
       item.values = [color(true, "On"), color(false, "Off")];
       item.label = label();
