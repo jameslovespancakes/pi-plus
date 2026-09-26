@@ -57,7 +57,14 @@ function timeoutSignal(signal?: AbortSignal): AbortSignal {
 }
 
 /** POSTs to one endpoint; undefined for any non-2xx or transport failure. */
-async function postJson(endpoint: string, path: string, token: string, body: unknown, signal?: AbortSignal): Promise<unknown> {
+async function postJson(
+  endpoint: string,
+  path: string,
+  token: string,
+  body: unknown,
+  signal?: AbortSignal,
+  onFailure?: (status: number, body: unknown) => void,
+): Promise<unknown> {
   try {
     const response = await fetch(`${endpoint}/v1internal:${path}`, {
       method: "POST",
@@ -65,7 +72,10 @@ async function postJson(endpoint: string, path: string, token: string, body: unk
       body: JSON.stringify(body),
       signal: timeoutSignal(signal),
     });
-    if (!response.ok) return undefined;
+    if (!response.ok) {
+      if (onFailure) onFailure(response.status, await response.json().catch(() => undefined));
+      return undefined;
+    }
     return await response.json();
   } catch (error) {
     // A caller abort is a decision, not an endpoint failure to route around.
@@ -154,6 +164,28 @@ export async function fetchUserEmail(token: string, signal?: AbortSignal): Promi
   }
 }
 
+/** Only Google's observed verification destination may be opened during login. */
+function verificationUrl(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  try {
+    const url = new URL(value);
+    if (url.protocol === "https:" && url.hostname === "accounts.google.com"
+      && !url.port && !url.username && !url.password && url.pathname === "/signin/continue") return url.href;
+  } catch { /* An invalid link must never reach the browser. */ }
+  return undefined;
+}
+
+export class GeminiVerificationRequiredError extends Error {
+  readonly verificationUrl?: string;
+
+  constructor(url?: unknown) {
+    super("Google account verification required. Sign in to Antigravity with this account to continue.");
+    this.name = "GeminiVerificationRequiredError";
+    // The challenge URL is for the interactive auth UI, not serialized errors.
+    Object.defineProperty(this, "verificationUrl", { value: verificationUrl(url), enumerable: false });
+  }
+}
+
 /** One `retrieveUserQuota` bucket: a runtime model's remaining share of its window. */
 export interface QuotaBucket {
   modelId: string;
@@ -173,8 +205,22 @@ export async function fetchUserQuota(
   projectId: string,
   signal?: AbortSignal,
 ): Promise<QuotaBucket[]> {
+  let lastStatus: number | undefined;
+  let verificationRequired: GeminiVerificationRequiredError | undefined;
+  const onFailure = (status: number, body: unknown) => {
+    lastStatus = status;
+    const error = isRecord(body) && isRecord(body.error) ? body.error : undefined;
+    if (status !== 403 || !error) return;
+    const detail = Array.isArray(error.details) ? error.details.find((item) => isRecord(item)
+      && item["@type"] === "type.googleapis.com/google.rpc.ErrorInfo"
+      && item.domain === "cloudcode-pa.googleapis.com" && item.reason === "VALIDATION_REQUIRED") : undefined;
+    if (detail || (typeof error.message === "string" && /verify your account/i.test(error.message))) {
+      const candidate = new GeminiVerificationRequiredError(detail?.metadata?.validation_url);
+      if (!verificationRequired?.verificationUrl) verificationRequired = candidate;
+    }
+  };
   for (const endpoint of GEMINI_ENDPOINTS) {
-    const answer = await postJson(endpoint, "retrieveUserQuota", token, { project: projectId }, signal);
+    const answer = await postJson(endpoint, "retrieveUserQuota", token, { project: projectId }, signal, onFailure);
     if (!isRecord(answer)) continue;
     const buckets = Array.isArray(answer.buckets) ? answer.buckets : [];
     return buckets.flatMap((bucket): QuotaBucket[] => {
@@ -190,7 +236,8 @@ export async function fetchUserQuota(
       }];
     });
   }
-  throw new Error("Gemini did not return quota from any endpoint.");
+  if (verificationRequired) throw verificationRequired;
+  throw new Error(`Gemini did not return quota from any endpoint${lastStatus ? ` (HTTP ${lastStatus})` : ""}.`);
 }
 
 /** One entry of `fetchAvailableModels`, keyed by its runtime model id. */

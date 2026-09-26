@@ -6,7 +6,9 @@ import type {
 } from "@earendil-works/pi-ai";
 import { startOAuthCallbackServer, type OAuthCallbackServer } from "../oauth/callback-server.ts";
 import { generatePkce, generateState, parseCallback } from "../oauth/pkce.ts";
-import { geminiEnv, discoverProjectId, fallbackProjectId, fetchUserEmail } from "./client.ts";
+import {
+  geminiEnv, discoverProjectId, fallbackProjectId, fetchUserEmail, fetchUserQuota, GeminiVerificationRequiredError,
+} from "./client.ts";
 import {
   credentialEmail,
   credentialProjectId,
@@ -140,6 +142,55 @@ async function awaitCode(
   return parsed.code;
 }
 
+/** OAuth alone does not clear Google's account-verification gate. No inference is sent. */
+export async function confirmGeminiAccess(
+  credential: OAuthCredential,
+  interaction: ProviderAuthInteraction,
+): Promise<OAuthCredential> {
+  let openedUrl: string | undefined;
+  // Every retry requires user input; no background polling or endless browser loop.
+  for (let attempt = 0; attempt < 4; attempt++) {
+    interaction.signal.throwIfAborted();
+    interaction.notify({ type: "progress", message: "Confirming Gemini account access…" });
+    const signal = AbortSignal.any([interaction.signal, AbortSignal.timeout(30_000)]);
+    if (credential.expires <= Date.now() + 60_000) credential = await refresh(credential, signal);
+    // Verification may also have blocked login-time project discovery.
+    if (attempt > 0 && !credentialProjectId(credential)) {
+      const projectId = await discoverProjectId(credential.access, signal);
+      if (projectId) credential = { ...credential, projectId } as GeminiCredential;
+    }
+    try {
+      await fetchUserQuota(credential.access, requestProjectId(credential), signal);
+      interaction.signal.throwIfAborted();
+      return credential;
+    } catch (error) {
+      interaction.signal.throwIfAborted();
+      if (!(error instanceof GeminiVerificationRequiredError)) throw error;
+      if (attempt === 3) throw new Error("Google verification is still required; Gemini sign-in was not completed. Finish verification and retry.", { cause: error });
+      if (error.verificationUrl && error.verificationUrl !== openedUrl) {
+        openedUrl = error.verificationUrl;
+        interaction.notify({
+          type: "auth_url", url: openedUrl,
+          instructions: "Complete Google's verification using the account you just signed into. Then return here to check access.",
+        });
+      } else {
+        interaction.notify({ type: "info", message: error.message });
+      }
+      const action = await interaction.prompt({
+        type: "select",
+        message: "Gemini sign-in is pending Google verification.",
+        options: [
+          { id: "check", label: "I've completed verification — check again" },
+          { id: "cancel", label: "Cancel sign-in" },
+        ],
+        signal: interaction.signal,
+      });
+      if (action !== "check") throw new Error("Gemini sign-in cancelled; account access was not confirmed.", { cause: error });
+    }
+  }
+  throw new Error("Gemini account access was not confirmed.");
+}
+
 async function login(interaction: ProviderAuthInteraction): Promise<OAuthCredential> {
   const { verifier, challenge } = await generatePkce();
   // Independent of the verifier: a leaked callback URL must not disclose it.
@@ -148,7 +199,7 @@ async function login(interaction: ProviderAuthInteraction): Promise<OAuthCredent
   const server = await startOAuthCallbackServer({
     port: CALLBACK_PORT,
     path: CALLBACK_PATH,
-    successMessage: "Gemini sign-in complete. You can close this window and return to pi.",
+    successMessage: "Google authorization received. Return to pi to confirm Gemini access and complete any required verification.",
   }).catch((error: unknown) => {
     throw new Error(
       `Could not listen on port ${CALLBACK_PORT} for the Google callback`
@@ -184,14 +235,14 @@ async function login(interaction: ProviderAuthInteraction): Promise<OAuthCredent
       discoverProjectId(token.access_token, interaction.signal),
     ]);
 
-    return {
+    return await confirmGeminiAccess({
       type: "oauth",
       access: token.access_token,
       refresh: token.refresh_token,
       expires: expiresAt(token),
       ...(projectId && { projectId }),
       ...(email && { email }),
-    } satisfies GeminiCredential;
+    } satisfies GeminiCredential, interaction);
   } finally {
     server.close();
   }

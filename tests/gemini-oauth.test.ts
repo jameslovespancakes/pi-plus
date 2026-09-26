@@ -13,6 +13,7 @@ import {
   encodeApiKey,
 } from "../src/core/gemini/credentials.ts";
 import { geminiOAuth, requestProjectId } from "../src/core/gemini/oauth.ts";
+import { oauthSuccessHtml } from "../src/core/oauth/callback-server.ts";
 
 interface Call { url: string; body: any }
 
@@ -162,12 +163,19 @@ test("a rejected refresh names Google's reason", async () => {
   });
 });
 
+test("the browser callback acknowledges authorization without claiming completed sign-in", () => {
+  const html = oauthSuccessHtml("Return to pi to confirm account access.");
+  assert.match(html, /<title>Authorization received<\/title>/);
+  assert.doesNotMatch(html, /Signed in|sign-in complete/i);
+});
+
 test("login binds the callback to its own state and exchanges with PKCE", async () => {
   let authUrl: URL | undefined;
   await withEnv("PI_GEMINI_PROJECT_ID", undefined, () => withGoogle({
     "oauth2.googleapis.com/token": () => Response.json({ access_token: "ya29.first", refresh_token: "1//r", expires_in: 3600 }),
     "userinfo": () => Response.json({ email: "me@example.com" }),
     "loadCodeAssist": () => Response.json({ cloudaicompanionProject: "managed-1" }),
+    "retrieveUserQuota": () => Response.json({ buckets: [] }),
   }, async (calls) => {
     const credential = await geminiOAuth.login({
       signal: new AbortController().signal,
@@ -179,6 +187,7 @@ test("login binds the callback to its own state and exchanges with PKCE", async 
     assert.equal(credential.access, "ya29.first");
     assert.equal(credential.projectId, "managed-1");
     assert.equal(credential.email, "me@example.com");
+    assert.equal(calls.filter((call) => call.url.includes("retrieveUserQuota")).length, 1, "login must confirm account access before returning credentials");
 
     assert.equal(authUrl!.searchParams.get("redirect_uri"), "http://localhost:51121/oauth-callback");
     assert.equal(authUrl!.searchParams.get("access_type"), "offline");

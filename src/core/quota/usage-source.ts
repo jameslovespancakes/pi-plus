@@ -1,10 +1,11 @@
 import { loadOAuthPool, saveOAuthAccount, sharedOAuthPoolStore, type PooledOAuthAccount } from "../accounts/oauth-pool.ts";
 import { refreshAbortSignal, type AccountQuotaState } from "../accounts/routing.ts";
 import { anthropicAccountIdentity, cachedAnthropicAccountIdentity } from "../anthropic/identity.ts";
-import { loadAccounts, saveAccount, type Account as AnthropicAccount } from "../anthropic/store.ts";
-import { refreshToken } from "../anthropic/oauth.ts";
+import { loadAccounts, type Account as AnthropicAccount } from "../anthropic/store.ts";
+import { ensureAccessToken } from "../anthropic/quota.ts";
+import { readClaudeQuota } from "../anthropic/usage-cache.ts";
 import { claimsOf } from "../codex/store.ts";
-import { fetchUserQuota } from "../gemini/client.ts";
+import { fetchUserQuota, GeminiVerificationRequiredError } from "../gemini/client.ts";
 import { credentialEmail } from "../gemini/credentials.ts";
 import { geminiOAuth, requestProjectId } from "../gemini/oauth.ts";
 import { summarizeGeminiQuota } from "../gemini/quota.ts";
@@ -15,9 +16,8 @@ import { CLAUDE_FRESH_MS, OBSERVED_PROVIDERS, type UsageRow } from "./pool.ts";
  * Fetches subscription quota from the Claude, Codex and Gemini endpoints, and
  * reports what response headers showed for providers with no usage endpoint.
  *
- * Pure data access: no pi imports, no module-level mutable state, no rendering.
- * Everything here returns values so it can be tested without a live agent.
- * Scheduling, caching and retention belong to services/usage-service.ts.
+ * No pi imports or rendering. Claude quota/cooldown is shared in usage-cache.ts;
+ * display scheduling and retention belong to services/usage-service.ts.
  */
 
 const TIMEOUT_MS = 10_000;
@@ -101,72 +101,6 @@ function resetToMs(value: unknown): number | undefined {
   return undefined;
 }
 
-async function claudeUsage(group: string, token: string): Promise<{ rows: UsageRow[]; error?: string }> {
-  const response = await fetch("https://api.anthropic.com/api/oauth/usage", {
-    headers: { Authorization: `Bearer ${token}`, "anthropic-beta": "oauth-2025-04-20", Accept: "application/json" },
-    signal: AbortSignal.timeout(TIMEOUT_MS),
-  });
-  if (!response.ok) return { rows: [], error: `${group}: HTTP ${response.status}` };
-  const body = await response.json() as any;
-
-  const rows: UsageRow[] = [];
-  const push = (label: string, window: any) => {
-    const used = pct(window?.utilization);
-    if (used === undefined) return;
-    rows.push({
-      group,
-      label,
-      remaining: 100 - used,
-      resetAt: resetToMs(window?.resets_at),
-      capacity: typeof window?.limit_dollars === "number" && window.limit_dollars > 0 ? window.limit_dollars : undefined,
-    });
-  };
-  push("5h", body.five_hour);
-  push("7d", body.seven_day);
-  // Scoped labels are lower case in every source (the stored snapshot keeps
-  // lower-cased ids), or one limit pools as two half-reported windows.
-  push("7d opus", body.seven_day_opus ?? body.seven_day_omelette);
-  push("7d sonnet", body.seven_day_sonnet);
-
-  for (const limit of Array.isArray(body.limits) ? body.limits : []) {
-    const scoped = limit?.scope?.model?.display_name;
-    const used = pct(limit?.percent);
-    if (typeof scoped !== "string" || !scoped || used === undefined) continue;
-    const label = `7d ${scoped.toLowerCase()}`;
-    if (rows.some((row) => row.label === label)) continue;
-    rows.push({ group, label, remaining: 100 - used, resetAt: resetToMs(limit?.resets_at) });
-  }
-
-  const extra = body.extra_usage;
-  if (extra?.is_enabled && pct(extra?.utilization) !== undefined) {
-    rows.push({ group, label: "Extra", remaining: 100 - pct(extra.utilization)! });
-  }
-
-  return rows.length
-    ? { rows: rows.map((row) => ({ ...row, checkedAt: Date.now() })) }
-    : { rows: [], error: `${group}: usage windows unavailable` };
-}
-
-/**
- * HUD polling must never wait indefinitely on OAuth refresh or retry it behind
- * a live agent turn. The provider owns request-time refresh/retry policy.
- */
-async function fallbackAccountToken(account: AnthropicAccount): Promise<string | undefined> {
-  const valid = typeof account.expires === "number" && Date.now() + 60_000 < account.expires;
-  if (valid && account.access) return account.access;
-  if (!account.refresh) return account.access;
-
-  const refreshed = await refreshToken({ refreshToken: account.refresh, maxRetries: 0 });
-  saveAccount({
-    ...account,
-    access: refreshed.access,
-    refresh: refreshed.refresh,
-    expires: refreshed.expires,
-    lastRefreshedAt: Date.now(),
-  });
-  return refreshed.access;
-}
-
 
 /**
  * Builds usage rows from a stored quota snapshot.
@@ -190,11 +124,14 @@ function rowsFromSnapshot(group: string, quota: any): UsageRow[] | undefined {
       resetAt: resetToMs(window.resetsAt),
       // Required: pool.isFresh discards any row without it, which would make
       // every cached row pool as "n/a".
-      checkedAt: window.checkedAt ?? quota.checkedAt ?? Date.now(),
+      checkedAt: window.checkedAt ?? quota.checkedAt,
+      capacity: window.capacity,
+      stale: Date.now() - (window.checkedAt ?? quota.checkedAt ?? 0) >= CLAUDE_FRESH_MS,
     });
   };
   push("5h", quota.five_hour);
   push("7d", quota.seven_day);
+  push("Extra", quota.extra);
   for (const scoped of Array.isArray(quota.scoped) ? quota.scoped : []) {
     if (typeof scoped?.remainingPercent !== "number" || typeof scoped?.id !== "string" || !scoped.id) continue;
     // Snapshots written before the fix restate the 5h/7d windows as "scoped".
@@ -213,7 +150,7 @@ export async function fetchClaudeRows(
   const read = options.readCredential ?? readAuthFile;
   const rows: UsageRow[] = [];
   const errors: string[] = [];
-  const accounts: Array<{ group: string; token?: string; account?: AnthropicAccount }> = [];
+  const accounts: Array<{ group: string; token?: string; identity?: string; account?: AnthropicAccount }> = [];
   const groups = new Set<string>();
 
   let sidecars: AnthropicAccount[] = [];
@@ -234,9 +171,9 @@ export async function fetchClaudeRows(
       // Counting it twice filed every window twice and marked the pool partial.
       const identity = cachedAnthropicAccountIdentity(primary.access)
         ?? await anthropicAccountIdentity(primary.access).catch(() => undefined);
-      const twin = identity ? sidecars.find((account) => account.identity === identity) : undefined;
+      const twin = sidecars.find((account) => account.access === primary.access || (identity && account.identity === identity));
       if (!twin) {
-        accounts.push({ group: primaryGroup, token: primary.access });
+        accounts.push({ group: primaryGroup, token: primary.access, identity });
         groups.add(primaryGroup);
       }
     }
@@ -246,28 +183,28 @@ export async function fetchClaudeRows(
     errors.push(`${primaryGroup}: ${errorText(error)}`);
   }
 
+  const seen = new Set<string>();
   for (const account of sidecars) {
+    const key = account.identity ?? account.access ?? account.id;
+    if (seen.has(key)) continue;
+    seen.add(key);
     accounts.push({ group: claudeGroup(account), account });
     groups.add(claudeGroup(account));
   }
 
   for (const entry of accounts) {
     try {
-      // Cached snapshot first: it is free, current, and cannot be throttled.
-      const cached = rowsFromSnapshot(entry.group, entry.account?.quota);
-      if (cached) {
-        rows.push(...cached);
-        continue;
-      }
-
-      const token = entry.token ?? (entry.account ? await fallbackAccountToken(entry.account) : undefined);
+      const token = entry.token ?? (entry.account ? await ensureAccessToken(entry.account) : undefined);
       if (!token) {
         errors.push(`${entry.group}: no token`);
         continue;
       }
-      const result = await claudeUsage(entry.group, token);
-      rows.push(...result.rows);
-      if (result.error) errors.push(result.error);
+      const result = await readClaudeQuota({
+        access: token, identity: entry.identity ?? entry.account?.identity,
+        id: entry.account?.id, quota: entry.account?.quota,
+      });
+      rows.push(...(rowsFromSnapshot(entry.group, result.quota) ?? []));
+      if (result.error) errors.push(`${entry.group}: ${result.error}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       errors.push(/invalid_grant/i.test(message)
@@ -436,13 +373,14 @@ export async function fetchGeminiRows(
       return rows.length ? { rows } : { rows, error: `${entry.group}: quota unavailable` };
     } catch (error) {
       const message = errorText(error);
+      const reauth = entry.account ? `/accounts reauth gemini ${entry.account.label || entry.account.id}` : "/login gemini";
       return {
         rows: [],
-        error: /invalid_grant/i.test(message)
-          ? `${entry.group}: login expired, run ${entry.account
-            ? `/accounts reauth gemini ${entry.account.label || entry.account.id}`
-            : "/login gemini"}`
-          : `${entry.group}: ${message}`,
+        error: error instanceof GeminiVerificationRequiredError
+          ? `${entry.group}: Google account verification required; run ${reauth} to complete verification.`
+          : /invalid_grant/i.test(message)
+            ? `${entry.group}: login expired, run ${reauth}`
+            : `${entry.group}: ${message}`,
       };
     }
   }));

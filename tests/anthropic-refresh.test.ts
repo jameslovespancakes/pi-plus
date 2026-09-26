@@ -7,9 +7,10 @@ import {
   ACCESS_REFRESH_WINDOW_MS,
   accessTokenNeedsRefresh,
   ensureAccessToken,
-  refreshAllQuota,
+  refreshDueAccessTokens,
 } from "../src/core/anthropic/quota.ts";
 import { anthropicAccountIdentity } from "../src/core/anthropic/identity.ts";
+import { observeClaudeQuota } from "../src/core/anthropic/usage-cache.ts";
 import { loadAccounts, saveAccounts, type Account } from "../src/core/anthropic/store.ts";
 import { routeAccessToken } from "../src/domains/subscriptions/provider.ts";
 
@@ -68,23 +69,17 @@ test("credential refresh is independent of quota freshness", async () => {
   const now = Date.now();
   const { config, cleanup } = fixture(accountAt(now, { quota: { checkedAt: now } }));
   let refreshes = 0;
-  let polls = 0;
 
   try {
-    const updated = await refreshAllQuota(false, config, {
+    const updated = await refreshDueAccessTokens(config, {
       now: () => now,
       refresh: async () => {
         refreshes++;
         return { access: "new-access", refresh: "new-refresh", expires: now + 8 * 60 * 60_000 };
       },
-      poll: async () => {
-        polls++;
-        return undefined;
-      },
     });
-    assert.equal(updated, 0, "fresh quota does not need another poll");
+    assert.equal(updated, 1);
     assert.equal(refreshes, 1, "a due credential still rotates");
-    assert.equal(polls, 0);
     assert.equal(loadAccounts(config)!.accounts[0]!.access, "new-access");
   } finally {
     cleanup();
@@ -116,38 +111,14 @@ test("routing collapses a persisted sidecar that is the primary Claude identity"
 
   try {
     process.env.PI_ANTHROPIC_AUTH_FILE = config;
+    observeClaudeQuota(primary, {
+      "anthropic-ratelimit-unified-5h-utilization": "1",
+      "anthropic-ratelimit-unified-5h-reset": String(Math.floor((now + 60_000) / 1000)),
+    });
     assert.equal(routeAccessToken(primary), "secondary-access");
   } finally {
     if (previous === undefined) delete process.env.PI_ANTHROPIC_AUTH_FILE;
     else process.env.PI_ANTHROPIC_AUTH_FILE = previous;
     rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-test("quota persistence cannot roll a refreshed token back to its stale snapshot", async () => {
-  const now = Date.now();
-  const { config, cleanup } = fixture(accountAt(now, { quota: { checkedAt: 1 } }));
-
-  try {
-    const updated = await refreshAllQuota(false, config, {
-      now: () => now,
-      refresh: async ({ refreshToken }) => {
-        assert.equal(refreshToken, "old-refresh");
-        return { access: "new-access", refresh: "new-refresh", expires: now + 8 * 60 * 60_000 };
-      },
-      poll: async (access) => {
-        assert.equal(access, "new-access");
-        return { checkedAt: now, source: "poll" };
-      },
-    });
-
-    const stored = loadAccounts(config)!.accounts[0]!;
-    assert.equal(updated, 1);
-    assert.equal(stored.access, "new-access");
-    assert.equal(stored.refresh, "new-refresh");
-    assert.equal(stored.expires, now + 8 * 60 * 60_000);
-    assert.equal(stored.quota?.checkedAt, now);
-  } finally {
-    cleanup();
   }
 });

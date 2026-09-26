@@ -68,11 +68,48 @@ test("quota falls through endpoints and reads an omitted fraction as exhausted",
   }
 });
 
+test("verification failures are actionable without exposing backend text", async () => {
+  const original = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls++;
+    if (calls > 1) return new Response("unavailable", { status: 503 });
+    return Response.json({ error: {
+      message: "Verify your account to continue. private@example.com ya29.secret https://example.com/private",
+    } }, { status: 403 });
+  }) as typeof fetch;
+  try {
+    await assert.rejects(fetchUserQuota("ya29.secret", "project-1"), (error: Error) => {
+      assert.match(error.message, /Google account verification required/);
+      assert.match(error.message, /Antigravity/);
+      assert.doesNotMatch(error.message, /private|ya29|https:/);
+      return true;
+    });
+    assert.equal(calls, 3);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("a healthy fallback endpoint still supplies quota after a denial", async () => {
+  const original = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => ++calls === 1
+    ? Response.json({ error: { message: "Verify your account to continue." } }, { status: 403 })
+    : Response.json({ buckets: [{ modelId: "gemini-pro-agent", remainingFraction: 0.5 }] })) as typeof fetch;
+  try {
+    assert.equal((await fetchUserQuota("ya29.token", "project-1"))[0].remainingFraction, 0.5);
+    assert.equal(calls, 2);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 test("quota throws when no endpoint answers", async () => {
   const original = globalThis.fetch;
   globalThis.fetch = (async () => new Response("nope", { status: 500 })) as unknown as typeof fetch;
   try {
-    await assert.rejects(fetchUserQuota("ya29.token", "project-1"), /did not return quota/);
+    await assert.rejects(fetchUserQuota("ya29.token", "project-1"), /did not return quota.*HTTP 500/);
   } finally {
     globalThis.fetch = original;
   }

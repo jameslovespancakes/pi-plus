@@ -46,7 +46,7 @@ function page(title: string, message: string, details?: string): string {
 }
 
 export function oauthSuccessHtml(message: string): string {
-  return page("Signed in", message);
+  return page("Authorization received", message);
 }
 
 export function oauthErrorHtml(message: string, details?: string): string {

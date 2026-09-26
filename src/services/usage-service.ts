@@ -119,7 +119,8 @@ export async function refreshUsage(ctx: any, force = false): Promise<void> {
   inFlight = (async () => {
     try {
       const result = await fetchAll(ctx, sourceOptions);
-      const rateLimited = result.errors.some((error) => error.includes("429"));
+      // Claude owns a persistent per-account cooldown; it must not stall other providers.
+      const rateLimited = result.errors.some((error) => !error.startsWith("Claude ") && error.includes("429"));
       recordUsageDrops(result.rows);
 
       // Per-account merge: accounts that failed this cycle keep their last

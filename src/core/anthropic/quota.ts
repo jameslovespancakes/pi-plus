@@ -1,6 +1,5 @@
-import { createHash, randomUUID } from "node:crypto";
-import { closeSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { createHash } from "node:crypto";
+import { acquireFileLease } from "../file-lease.ts";
 import { refreshAbortSignal } from "../accounts/routing.ts";
 import {
   configPath as defaultConfigPath,
@@ -12,10 +11,7 @@ import {
 } from "./store.ts";
 import { refreshToken, type RefreshOptions, type TokenSet } from "./oauth.ts";
 
-/** Uses free response headers first, polling only stale idle accounts. */
-
-const QUOTA_URL = "https://api.anthropic.com/api/oauth/usage";
-const TIMEOUT_MS = 10_000;
+/** Quota parsing and pooled credential refresh. Status I/O lives in usage-cache.ts. */
 /** Refresh early enough to absorb transient OAuth rate limits before expiry. */
 export const ACCESS_REFRESH_WINDOW_MS = 4 * 60 * 60_000;
 /** Background refresh cadence; each process adds a small startup jitter. */
@@ -24,26 +20,8 @@ const REFRESH_LOCK_TTL_MS = 60_000;
 const REFRESH_JOIN_WAIT_MS = 16_000;
 /** Snapshot lifetime and minimum interval between polls. */
 export const QUOTA_FRESH_MS = 10 * 60_000;
-/** After a 429, wait at least this long before touching the endpoint again. */
-export const QUOTA_BACKOFF_MS = 15 * 60_000;
-
-/** Per-account earliest next poll, set when the endpoint rate limits us. */
-const blockedUntil = new Map<string, number>();
-
-/** True when a recent 429 means this account must not be polled yet. */
-export function isPollBlocked(accountId: string, now = Date.now()): boolean {
-  const until = blockedUntil.get(accountId);
-  if (until === undefined) return false;
-  if (now >= until) { blockedUntil.delete(accountId); return false; }
-  return true;
-}
-
-/** Visible for tests; clears the backoff table. */
-export function resetPollBackoff(): void {
-  blockedUntil.clear();
-}
-
 const pct = (value: unknown): number | undefined => {
+  if (value == null || typeof value === "boolean" || (typeof value === "string" && !value.trim())) return undefined;
   const n = typeof value === "number" ? value : Number(value);
   return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : undefined;
 };
@@ -58,6 +36,7 @@ export function parseQuota(body: any, now = Date.now()): QuotaSnapshot {
       remainingPercent: 100 - used,
       resetsAt: typeof raw?.resets_at === "string" ? raw.resets_at : undefined,
       checkedAt: now,
+      capacity: typeof raw?.limit_dollars === "number" && raw.limit_dollars > 0 ? raw.limit_dollars : undefined,
     };
   };
 
@@ -79,9 +58,15 @@ export function parseQuota(body: any, now = Date.now()): QuotaSnapshot {
     })
     .filter(Boolean);
 
+  for (const [id, raw] of [["opus", body?.seven_day_opus ?? body?.seven_day_omelette], ["sonnet", body?.seven_day_sonnet]] as const) {
+    const value = window(raw);
+    if (value && !scoped.some((entry: { id: string }) => entry.id === id)) scoped.push({ id, ...value });
+  }
+
   return {
     five_hour: window(body?.five_hour),
     seven_day: window(body?.seven_day),
+    extra: body?.extra_usage?.is_enabled ? window(body.extra_usage) : undefined,
     scoped: scoped.length ? scoped : undefined,
     checkedAt: now,
     source: "poll",
@@ -114,7 +99,7 @@ export function parseQuotaHeaders(
 
   const window = (prefix: string) => {
     const raw = get(`${prefix}-utilization`);
-    if (raw === undefined) return undefined;
+    if (raw === undefined || !raw.trim()) return undefined;
     const fraction = Number(raw);
     if (!Number.isFinite(fraction)) return undefined;
 
@@ -137,60 +122,6 @@ export function parseQuotaHeaders(
   return { five_hour, seven_day, checkedAt: now, source: "headers" };
 }
 
-/** Merges header quota while preserving polled model limits. */
-export function applyQuotaHeaders(
-  accountId: string,
-  headers: Record<string, unknown> | undefined,
-  now = Date.now(),
-): boolean {
-  const fresh = parseQuotaHeaders(headers, now);
-  if (!fresh) return false;
-
-  const storage = loadAccounts();
-  const account = storage?.accounts.find((a) => a.id === accountId);
-  if (!account) return false;
-
-  // Skip unchanged values to avoid credential writes on every response.
-  const previous = account.quota;
-  const unchanged =
-    previous?.five_hour?.usedPercent === fresh.five_hour?.usedPercent
-    && previous?.seven_day?.usedPercent === fresh.seven_day?.usedPercent;
-  if (unchanged) return false;
-
-  saveAccount({ ...account, quota: { ...fresh, scoped: previous?.scoped } });
-  return true;
-}
-
-/** Polls one account and records rate-limit backoff. */
-export async function pollQuota(
-  accessToken: string,
-  accountId?: string,
-): Promise<QuotaSnapshot | undefined> {
-  if (accountId && isPollBlocked(accountId)) return undefined;
-  try {
-    const response = await fetch(QUOTA_URL, {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "anthropic-beta": "oauth-2025-04-20",
-        Accept: "application/json",
-      },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-    if (response.status === 429 && accountId) {
-      // `retry-after` is commonly 0 here, which is not a usable hint, so the
-      // floor is ours rather than the server's.
-      const hint = Number(response.headers.get("retry-after")) * 1000;
-      const wait = Number.isFinite(hint) && hint > 0 ? hint : QUOTA_BACKOFF_MS;
-      blockedUntil.set(accountId, Date.now() + Math.max(wait, QUOTA_BACKOFF_MS));
-      return undefined;
-    }
-    if (!response.ok) return undefined;
-    return parseQuota(await response.json());
-  } catch {
-    return undefined;
-  }
-}
-
 export function accessTokenNeedsRefresh(account: Account, now = Date.now()): boolean {
   return !account.access
     || typeof account.expires !== "number"
@@ -205,58 +136,11 @@ export interface EnsureAccessTokenOptions {
   refresh?: RefreshTokenFn;
 }
 
-export interface RefreshAllQuotaOptions extends EnsureAccessTokenOptions {
-  poll?: typeof pollQuota;
-}
-
-interface RefreshLock {
-  release(): void;
-}
-
 const refreshes = new Map<string, Promise<string | undefined>>();
 
 function refreshLockPath(accountId: string, config: string): string {
   const id = createHash("sha256").update(accountId).digest("hex").slice(0, 16);
   return `${statePath(config)}.refresh-${id}.lock`;
-}
-
-/** Cross-process exclusion for Anthropic's rotating refresh tokens. */
-function acquireRefreshLock(accountId: string, config: string, now: number): RefreshLock | undefined {
-  const path = refreshLockPath(accountId, config);
-  const owner = randomUUID();
-  mkdirSync(dirname(path), { recursive: true });
-
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const fd = openSync(path, "wx", 0o600);
-      try {
-        writeFileSync(fd, JSON.stringify({ owner, expiresAt: now + REFRESH_LOCK_TTL_MS }), "utf8");
-      } finally {
-        closeSync(fd);
-      }
-      return {
-        release() {
-          try {
-            const current = JSON.parse(readFileSync(path, "utf8"));
-            if (current?.owner === owner) rmSync(path, { force: true });
-          } catch {
-            // A stale or externally removed lock needs no cleanup.
-          }
-        },
-      };
-    } catch (error: any) {
-      if (error?.code !== "EEXIST") throw error;
-      try {
-        const current = JSON.parse(readFileSync(path, "utf8"));
-        if (Number(current?.expiresAt) > now) return undefined;
-        rmSync(path, { force: true });
-      } catch {
-        // A malformed lock is stale; remove it and retry once.
-        try { rmSync(path, { force: true }); } catch { /* best effort */ }
-      }
-    }
-  }
-  return undefined;
 }
 
 function storedAccount(accountId: string, config: string): Account | undefined {
@@ -304,7 +188,7 @@ async function refreshAccountNow(
   if (!accessTokenNeedsRefresh(latest, now())) return latest.access;
   if (!latest.refresh) return usableAccess(latest, now());
 
-  const lock = acquireRefreshLock(account.id, config, now());
+  const lock = acquireFileLease(refreshLockPath(account.id, config), REFRESH_LOCK_TTL_MS, now());
   if (!lock) return joinConcurrentRefresh(latest, config, now);
 
   try {
@@ -379,43 +263,5 @@ export async function refreshDueAccessTokens(
       return false;
     }
   }));
-  return results.filter(Boolean).length;
-}
-
-/** Refreshes due access tokens, then polls only stale quota snapshots. */
-export async function refreshAllQuota(
-  force = false,
-  config = defaultConfigPath(),
-  options: RefreshAllQuotaOptions = {},
-): Promise<number> {
-  await refreshDueAccessTokens(config, options);
-  const storage = loadAccounts(config);
-  if (!storage) return 0;
-  const now = options.now?.() ?? Date.now();
-  const poll = options.poll ?? pollQuota;
-
-  const stale = storage.accounts.filter(
-    (a) => a.enabled !== false && a.type === "oauth"
-      && (force || !isFresh(a.quota, now))
-      && !isPollBlocked(a.id, now));
-
-  const results = await Promise.all(stale.map(async (account) => {
-    try {
-      const token = await ensureAccessToken(account, { ...options, config });
-      if (!token) return false;
-      const quota = await poll(token, account.id);
-      if (!quota) return false;
-      // Do not restore the pre-refresh account snapshot here. That used to
-      // overwrite a freshly rotated access/refresh pair with the now-invalid
-      // old pair immediately after a successful quota poll.
-      const current = storedAccount(account.id, config);
-      if (!current || current.access !== token) return false;
-      saveAccount({ ...current, quota }, config);
-      return true;
-    } catch {
-      return false;
-    }
-  }));
-
   return results.filter(Boolean).length;
 }

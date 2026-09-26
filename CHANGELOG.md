@@ -8,6 +8,23 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+### Fixed
+
+- Consolidated Claude usage fetching into one shared cache with cross-process
+  exclusion, persistent exponential backoff, and Retry-After support. Manual
+  refresh cannot bypass cooldowns; removed the duplicate provider quota poller.
+- Capture quota headers for the actual request credential, including the primary
+  login. Unchanged percentages refresh observation times; partial headers preserve
+  other windows without making them look fresh. Usage telemetry never generates
+  inference requests, and quota updates no longer rewrite pooled OAuth credentials.
+- Gemini account labels no longer append email addresses. Quota failures now
+  explain when Google requires account verification instead of hiding the denial
+  behind a generic unavailable message.
+- Gemini login and reauthorization open trusted Google verification links through
+  pi's auth UI when required, then recheck access before saving credentials or
+  reporting success. Verification is cancellable and retries are user-driven;
+  background usage checks provide a reauth command without opening browsers.
+
 ## [1.0.21] - 2026-09-26
 
 ### Changed

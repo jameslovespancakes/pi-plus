@@ -93,11 +93,7 @@ export const GEMINI_SPEC: PooledOAuthProviderSpec<typeof GEMINI_API> = {
     const email = credentialEmail(credential);
     return email ? `email:${email.toLowerCase()}` : undefined;
   },
-  describeAccount: (account) => {
-    const email = credentialEmail(account);
-    const name = account.label || account.id.slice(0, 8);
-    return email ? `${name} (${email})` : name;
-  },
+  describeAccount: (account) => account.label || account.id.slice(0, 8),
   accessTokenOf: (apiKey) => {
     try {
       return decodeApiKey(apiKey).token;

@@ -20,6 +20,7 @@ export const CONFIG_FILE = "anthropic-auth.json";
 export const STATE_FILE = "anthropic-auth-state.json";
 
 export interface QuotaWindow {
+  capacity?: number;
   remainingPercent?: number;
   usedPercent?: number;
   resetsAt?: string;
@@ -30,6 +31,7 @@ export interface QuotaWindow {
 export interface QuotaSnapshot {
   five_hour?: QuotaWindow;
   seven_day?: QuotaWindow;
+  extra?: QuotaWindow;
   scoped?: QuotaWindow[];
   checkedAt?: number;
   source?: "poll" | "headers";

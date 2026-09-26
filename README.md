@@ -88,6 +88,16 @@ usage in the footer. Supports Anthropic, OpenAI Codex, Gemini, Kimi Code, and xA
 **`/routing quota-aware`** uses reported capacity; **`/routing sequential`**
 follows account order. **`/usage`** refreshes the bars.
 
+Claude usage comes from response headers first, with a shared cached status
+fetch when needed. Cooldowns survive restarts and are respected by `/usage`;
+usage checks never generate model responses or consume inference tokens.
+
+Gemini login and reauthorization confirm account access before reporting success.
+If Google requires verification, its verification page opens through pi's auth UI;
+complete it, then choose **check again**. Credentials are saved only after the
+server confirms access. Background quota checks never open a browser; they point
+you to `/login gemini` or `/accounts reauth gemini <name>` when verification is needed.
+
 Quota visibility depends on the provider. Where no usage endpoint exists,
 pi-plus shows the last observed rate-limit reading rather than inventing one.
 

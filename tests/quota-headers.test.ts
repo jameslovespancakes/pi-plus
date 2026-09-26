@@ -3,8 +3,6 @@ import assert from "node:assert/strict";
 import {
   parseQuotaHeaders,
   parseQuota,
-  isPollBlocked,
-  resetPollBackoff,
   isFresh,
   QUOTA_FRESH_MS,
 } from "../src/core/anthropic/quota.ts";
@@ -68,15 +66,8 @@ test("utilisation is clamped to 0-100", () => {
   assert.equal(parseQuotaHeaders({ "anthropic-ratelimit-unified-5h-utilization": "-1" })!.five_hour?.usedPercent, 0);
 });
 
-test("poll backoff starts clear and is resettable", () => {
-  resetPollBackoff();
-  assert.equal(isPollBlocked("any-account"), false);
-});
-
 test("the freshness window is the poll rate limiter", () => {
-  // Polling is driven by message sends, so this constant is the only thing
-  // bounding the rate. Ten minutes: sending faster than that must not poll
-  // more often than that.
+  // Status refreshes reuse fresh snapshots; message sends never poll usage.
   assert.equal(QUOTA_FRESH_MS, 10 * 60_000);
 });
 

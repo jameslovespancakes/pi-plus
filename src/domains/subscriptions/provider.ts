@@ -12,13 +12,13 @@ import { catalogIsStale, refreshAnthropicCatalog } from "../../core/anthropic/ca
 import { ANTHROPIC_MODELS, buildAnthropicModels, type ModelSpec } from "../../core/anthropic/models.ts";
 import {
   ACCESS_REFRESH_INTERVAL_MS,
-  applyQuotaHeaders,
-  refreshAllQuota,
+  refreshDueAccessTokens,
 } from "../../core/anthropic/quota.ts";
 import {
   MAIN_ACCOUNT_ID, familyForModel, selectAccount, type Candidate,
 } from "../../core/anthropic/routing.ts";
 import { getRoutingMode, loadAccounts, saveAccount } from "../../core/anthropic/store.ts";
+import { cachedClaudeQuota, observeClaudeQuota } from "../../core/anthropic/usage-cache.ts";
 import { refreshAbortSignal } from "../../core/accounts/routing.ts";
 
 /**
@@ -40,13 +40,7 @@ function isAnthropicMessagesPayload(payload: any): boolean {
 /** The catalogue currently registered; replaced when discovery finds a new model. */
 let registeredModels: ModelSpec[] = ANTHROPIC_MODELS;
 
-let lastSelected: { id: string; at: number } | undefined;
 const accountLastUsed = new Map<string, number>();
-
-/** Which account served the most recent request, for the UI. */
-export function lastRoutedAccount(): { id: string; at: number } | undefined {
-  return lastSelected;
-}
 
 /** Routes to a pooled account, falling back to pi's primary credential. */
 export function routeAccessToken(primary: string, modelId?: string, _sessionId?: string): string {
@@ -71,7 +65,8 @@ export function routeAccessToken(primary: string, modelId?: string, _sessionId?:
     {
       id: MAIN_ACCOUNT_ID,
       access: primary,
-      quota: storage.main?.quota as any,
+      quota: cachedClaudeQuota({ access: primary, identity: primaryIdentity,
+        quota: storage.accounts.find((account) => primaryIdentity && account.identity === primaryIdentity)?.quota }),
       order: 0,
       lastUsed: accountLastUsed.get(MAIN_ACCOUNT_ID) ?? Number(storage.main?.lastUsed ?? 0),
     },
@@ -81,7 +76,7 @@ export function routeAccessToken(primary: string, modelId?: string, _sessionId?:
     ...sidecars.map((a, index) => ({
         id: a.id,
         access: a.access,
-        quota: a.quota,
+        quota: cachedClaudeQuota({ access: a.access!, id: a.id, identity: a.identity, quota: a.quota }),
         order: index + 1,
         lastUsed: accountLastUsed.get(a.id) ?? a.lastUsed ?? 0,
         account: a,
@@ -99,7 +94,6 @@ export function routeAccessToken(primary: string, modelId?: string, _sessionId?:
   }
 
   const now = Date.now();
-  lastSelected = { id: picked.candidate.id, at: now };
   accountLastUsed.set(picked.candidate.id, now);
   if (picked.candidate.account) {
     // Minute precision avoids a credential write on every request.
@@ -215,16 +209,19 @@ export function registerAnthropicProvider(pi: ExtensionAPI): void {
     return JSON.parse(signed);
   });
 
-  /** Updates the routed account from response quota headers. */
-  pi.on("after_provider_response", (event: any) => {
-    const routed = lastRoutedAccount();
-    // The primary account lives in pi's auth store.
-    if (!routed || routed.id === MAIN_ACCOUNT_ID) return;
-    try {
-      applyQuotaHeaders(routed.id, event?.headers);
-    } catch {
-      // Never let bookkeeping disturb a response.
-    }
+  // Capture the credential actually sent by this session, not global routing state.
+  let requestAccess: string | undefined;
+  pi.on("before_provider_headers", (event) => {
+    const authorization = Object.entries(event.headers).find(([key]) => key.toLowerCase() === "authorization")?.[1];
+    requestAccess = typeof authorization === "string" && /^Bearer sk-ant-oat/i.test(authorization)
+      ? authorization.slice(7) : undefined;
+  });
+  pi.on("after_provider_response", (event) => {
+    const access = requestAccess;
+    requestAccess = undefined;
+    if (!access) return;
+    try { observeClaudeQuota(access, event.headers); }
+    catch { /* Telemetry must never disturb inference. */ }
   });
 
   /**
@@ -236,7 +233,7 @@ export function registerAnthropicProvider(pi: ExtensionAPI): void {
   const startRefreshLoop = () => {
     if (refreshTimer) return;
     refreshTimer = setInterval(
-      () => void refreshAllQuota().catch(() => {}),
+      () => void refreshDueAccessTokens().catch(() => {}),
       ACCESS_REFRESH_INTERVAL_MS + Math.floor(Math.random() * 30_000),
     );
     refreshTimer.unref?.();
@@ -244,12 +241,12 @@ export function registerAnthropicProvider(pi: ExtensionAPI): void {
 
   pi.on("input", async () => {
     startRefreshLoop();
-    void refreshAllQuota().catch(() => {});
+    void refreshDueAccessTokens().catch(() => {});
   });
 
   pi.on("session_start", async (_event: any, ctx: any) => {
     startRefreshLoop();
-    void refreshAllQuota().catch(() => {});
+    void refreshDueAccessTokens().catch(() => {});
     // Off the request path and TTL-gated, so this is one call a day at most.
     void discoverModels(pi, ctx).catch(() => {});
   });

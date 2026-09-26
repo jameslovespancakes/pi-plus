@@ -116,6 +116,30 @@ test("Gemini rows come from the stored primary and each distinct pooled account"
   });
 });
 
+test("a verification-blocked second Gemini account does not hide primary quota", async () => {
+  await withTempFiles(async () => {
+    saveOAuthAccount("gemini", {
+      type: "oauth", id: "second", label: "Second", access: "ya29.second", refresh: "r",
+      expires: Date.now() + HOUR, addedAt: 1,
+    });
+    await withFetch((url, init) => {
+      assert.match(url, /retrieveUserQuota$/);
+      return bearer(init) === "ya29.second"
+        ? Response.json({ error: { message: "Verify your account to continue." } }, { status: 403 })
+        : Response.json({ buckets: [{ modelId: "gemini-pro-agent", remainingFraction: 0.75 }] });
+    }, async () => {
+      const result = await fetchGeminiRows(noRouting, {
+        readCredential: () => ({ type: "oauth", access: "ya29.main", expires: Date.now() + HOUR }),
+      });
+      assert.deepEqual(result.groups, ["Gemini Primary", "Gemini Second"]);
+      assert.deepEqual(result.rows.map((row) => [row.group, row.label, row.remaining]), [["Gemini Primary", "Pro", 75]]);
+      assert.equal(result.errors.length, 1);
+      assert.match(result.errors[0], /^Gemini Second: Google account verification required/);
+      assert.match(result.errors[0], /\/accounts reauth gemini Second/);
+    });
+  });
+});
+
 test("Gemini stays silent without a login and reports a failing account by name", async () => {
   await withTempFiles(async () => {
     const none = await fetchGeminiRows(noRouting, { readCredential: () => undefined });

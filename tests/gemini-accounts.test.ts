@@ -9,6 +9,7 @@ import type { AccountContext } from "../src/core/accounts/registry.ts";
 import { loadOAuthPool, resetOAuthPoolCache, saveOAuthAccount } from "../src/core/accounts/oauth-pool.ts";
 import { encodeApiKey } from "../src/core/gemini/credentials.ts";
 import { STATIC_MODELS } from "../src/core/gemini/models.ts";
+import { confirmGeminiAccess } from "../src/core/gemini/oauth.ts";
 import {
   GEMINI_SPEC,
   CATALOG_TTL_MS,
@@ -64,15 +65,19 @@ test("Gemini is a registered account provider with routing", () => {
   assert.ok(geminiAccounts.setEnabled && geminiAccounts.rename);
 });
 
-test("accounts are identified and labelled by Google account email", async () => {
+test("accounts retain their chosen names and use email only for identity", async () => {
   await withPool(async () => {
     saveOAuthAccount(PROVIDER, account("one", "Work@Example.com"));
     saveOAuthAccount(PROVIDER, account("two", "personal@example.com"));
 
     const listed = await geminiAccounts.list();
     assert.deepEqual(listed.map((item) => item.identity), ["email:work@example.com", "email:personal@example.com"]);
-    // Google's opaque access tokens carry no claims, so the label comes from the stored email.
-    assert.equal(listed[0].label, "one (Work@Example.com)");
+    assert.deepEqual(listed.map((item) => item.label), ["one", "two"]);
+    assert.equal(GEMINI_SPEC.describeAccount!(account("fallback-id", "private@example.com", { label: "" })), "fallback");
+    await geminiAccounts.rename!(listed[1].id, "Work");
+    const renamed = (await geminiAccounts.list())[1];
+    assert.equal(renamed.label, "Work");
+    assert.equal(renamed.identity, "email:personal@example.com");
   });
 });
 
@@ -108,6 +113,44 @@ test("a second Google account joins the pool with its project", async () => {
     });
   } finally {
     GEMINI_SPEC.createProvider = original;
+  }
+});
+
+test("reauth opens verification and preserves saved credentials until access is confirmed", async () => {
+  const original = GEMINI_SPEC.createProvider;
+  const originalFetch = globalThis.fetch;
+  try {
+    await withPool(async () => {
+      const old = account("one", "work@example.com");
+      saveOAuthAccount(PROVIDER, old);
+      const updated = { ...old, access: "ya29.updated" };
+      GEMINI_SPEC.createProvider = () => ({ auth: { oauth: {
+        login: (interaction: Parameters<typeof confirmGeminiAccess>[1]) => confirmGeminiAccess(updated, interaction),
+      } } }) as any;
+      const opened: string[] = [];
+      const ctx: AccountContext = {
+        hasUI: true,
+        ui: { input: async () => undefined, select: async () => "Cancel sign-in", confirm: async () => true, notify: () => {} },
+        openBrowser: async (url) => { opened.push(url); },
+      };
+      globalThis.fetch = async () => Response.json({ error: {
+        message: "Verify your account to continue.",
+        details: [{
+          "@type": "type.googleapis.com/google.rpc.ErrorInfo", domain: "cloudcode-pa.googleapis.com",
+          reason: "VALIDATION_REQUIRED", metadata: { validation_url: "https://accounts.google.com/signin/continue" },
+        }],
+      } }, { status: 403 });
+      await assert.rejects(geminiAccounts.reauth(ctx, "one"), /sign-in cancelled/);
+      assert.deepEqual(opened, ["https://accounts.google.com/signin/continue"]);
+      assert.equal(loadOAuthPool(PROVIDER).accounts[0].access, old.access);
+
+      globalThis.fetch = async () => Response.json({ buckets: [] });
+      assert.equal(await geminiAccounts.reauth(ctx, "one"), "one");
+      assert.equal(loadOAuthPool(PROVIDER).accounts[0].access, updated.access);
+    });
+  } finally {
+    GEMINI_SPEC.createProvider = original;
+    globalThis.fetch = originalFetch;
   }
 });
 
