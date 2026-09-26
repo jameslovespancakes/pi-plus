@@ -139,7 +139,7 @@ test("native transcript renders streaming text, thinking, and actual tool output
 test("workflow runtime integration", () => {
   const env = { ...process.env };
   delete env.NODE_TEST_CONTEXT;
-  const output = execFileSync(process.execPath, ["--experimental-transform-types", "--test", "tests/fixtures/workflow-runtime.ts"], { cwd: process.cwd(), env, encoding: "utf8", timeout: 60_000 });
+  const output = execFileSync(process.execPath, ["--experimental-transform-types", "--test", "--test-reporter=tap", "tests/fixtures/workflow-runtime.ts"], { cwd: process.cwd(), env, encoding: "utf8", timeout: 60_000 });
   assert.match(output, /runAgent binds cancellation/);
   assert.match(output, /# fail 0/);
 });
