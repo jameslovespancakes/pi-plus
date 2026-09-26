@@ -3,8 +3,7 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
-import { BackgroundWorkflowCoordinator } from "./background-workflows.ts";
-import { backgroundUnavailableResult, startBackgroundWorkflowTool } from "./background-workflow-tool.ts";
+import { WorkflowLifecycle, workflowUnavailableResult } from "./workflow-lifecycle.ts";
 import { validateWorkflowRunId } from "./journal.ts";
 import { resolveWorkflowRunOptions, type ResolvedWorkflowRunOptions } from "./options.ts";
 import type { LoadedWorkflow } from "./types.ts";
@@ -29,8 +28,7 @@ import {
   WorkflowUsageLimitScheduler,
   type WorkflowUsageLimitSchedulerClock,
 } from "./workflow-usage-limit-scheduler.ts";
-import { WorkflowInspector } from "./ui/workflow-inspector.ts";
-import { WORKFLOW_VIEWER_OVERLAY_OPTIONS } from "./ui/workflow-viewer-layout.ts";
+import { WorkflowInspector, WORKFLOW_INSPECTOR_OVERLAY_OPTIONS } from "./ui/workflow-inspector.ts";
 import { completeCurrentArgument, splitArgumentPrefix } from "./command-completions.ts";
 
 type WorkflowRunCompletionContext = Pick<ExtensionContext, "cwd" | "sessionManager">;
@@ -55,7 +53,7 @@ export class WorkflowRunController {
   private completionContext: WorkflowRunCompletionContext | undefined;
 
   constructor(
-    private readonly background: BackgroundWorkflowCoordinator,
+    private readonly lifecycle: WorkflowLifecycle,
     private readonly dependencies: WorkflowRunControllerDependencies,
   ) {
     this.storeForCwd = dependencies.storeForCwd ?? ((cwd) => new ProjectWorkflowRunStore(cwd));
@@ -101,7 +99,7 @@ export class WorkflowRunController {
     }
     if (!ctx.hasUI) {
       const records = await this.listRecent(ctx.cwd);
-      ctx.ui.notify(formatWorkflowRunHistory(records, this.background.activeRunIds(ctx)), "info");
+      ctx.ui.notify(formatWorkflowRunHistory(records, this.lifecycle.activeRunIds(ctx)), "info");
       return;
     }
     await this.openRunSelector(ctx);
@@ -117,7 +115,7 @@ export class WorkflowRunController {
   private async openRunSelector(ctx: ExtensionCommandContext): Promise<void> {
     while (true) {
       const records = await this.listRecent(ctx.cwd);
-      const active = this.background.activeRunIds(ctx);
+      const active = this.lifecycle.activeRunIds(ctx);
       if (records.length === 0) {
         ctx.ui.notify(formatWorkflowRunHistory(records, active), "info");
         return;
@@ -149,7 +147,7 @@ export class WorkflowRunController {
   private async inspect(record: WorkflowRunRecord, ctx: ExtensionContext): Promise<void> {
     if (!ctx.hasUI || ctx.mode !== "tui") {
       ctx.ui.notify(
-        formatWorkflowRunDetails(record, this.background.activeRunIds(ctx).has(record.runId)),
+        formatWorkflowRunDetails(record, this.lifecycle.activeRunIds(ctx).has(record.runId)),
         "info",
       );
       return;
@@ -162,7 +160,7 @@ export class WorkflowRunController {
         () => done(undefined),
         { label: `${record.state.toUpperCase()} outcome`, text: retainedWorkflowRunOutcome(record) },
       ),
-      WORKFLOW_VIEWER_OVERLAY_OPTIONS,
+      WORKFLOW_INSPECTOR_OVERLAY_OPTIONS,
     );
   }
 
@@ -182,7 +180,7 @@ export class WorkflowRunController {
     }
     const available = availableWorkflowRunActions(
       record,
-      this.background.activeRunIds(ctx).has(record.runId),
+      this.lifecycle.activeRunIds(ctx).has(record.runId),
     );
     if (!available.includes(action)) {
       ctx.ui.notify(`Action ${action} is not available for ${record.state} run ${runId}.`, "warning");
@@ -204,11 +202,11 @@ export class WorkflowRunController {
             error: new Error("Workflow stopped by user."),
           });
           await this.storeForCwd(ctx.cwd).save(stopped);
-          await this.background.durableRunSettled(ctx, runId);
+          await this.lifecycle.durableRunSettled(ctx, runId);
           ctx.ui.notify(`Workflow run ${runId} is now stopped.`, "info");
           return;
         }
-        const stopped = await this.background.stop(ctx, runId);
+        const stopped = await this.lifecycle.stop(ctx, runId);
         ctx.ui.notify(`Workflow run ${runId} is now ${stopped.state}.`, "info");
         return;
       }
@@ -225,10 +223,10 @@ export class WorkflowRunController {
     record: WorkflowRunRecord,
     action: "resume" | "restart",
   ): Promise<string> {
-    const unavailable = backgroundUnavailableResult(ctx.mode);
+    const unavailable = workflowUnavailableResult(ctx.mode);
     if (unavailable) {
       const first = unavailable.content[0];
-      throw new Error(first?.type === "text" ? first.text : "background workflows are unavailable");
+      throw new Error(first?.type === "text" ? first.text : "workflows are unavailable");
     }
     const workflow = await this.dependencies.resolveWorkflow(record.workflow.name);
     if (!workflow) throw new Error(`registered workflow ${record.workflow.name} is unavailable`);
@@ -242,7 +240,6 @@ export class WorkflowRunController {
       throw new Error("workflow source changed, so journal replay cannot resume safely");
     }
     const options = resolveWorkflowRunOptions({
-      inspect: false,
       perf: record.options.perf,
       concurrency: record.options.concurrency ?? undefined,
       parallelSubmissionLimit: record.options.parallelSubmissionLimit ?? undefined,
@@ -259,13 +256,12 @@ export class WorkflowRunController {
       resultViewer: "skip",
       resumeFromRunId: action === "resume" ? record.runId : undefined,
     });
-    const result = await startBackgroundWorkflowTool({
-      coordinator: this.background,
+    const result = await this.lifecycle.launch({
       ctx,
       name: workflow.meta.name,
       options,
-      execute: (backgroundCtx, backgroundOptions) =>
-        this.dependencies.execute(backgroundCtx, workflow.meta.name, workflow, backgroundOptions),
+      execute: (runCtx, runOptions) =>
+        this.dependencies.execute(runCtx, workflow.meta.name, workflow, runOptions),
     });
     const first = result.content[0];
     const message = first?.type === "text" ? first.text : `Workflow ${action} started.`;
@@ -314,7 +310,7 @@ export class WorkflowRunController {
     const action = parts.completed[0];
     if (!action || !isWorkflowRunLifecycleAction(action)) return null;
     const records = await this.listRecent(ctx.cwd);
-    const active = this.background.activeRunIds(ctx);
+    const active = this.lifecycle.activeRunIds(ctx);
     return completeCurrentArgument(
       argumentPrefix,
       records

@@ -1,6 +1,6 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { assertWorkflowBudgetAvailable } from "./budget.ts";
-import { isWorkflowPauseError } from "./cancellation.ts";
+import { isWorkflowPauseError, WorkflowAgentStoppedError } from "./cancellation.ts";
 import type { WorkflowAgentReservation } from "./agent-limits.ts";
 import {
   type AgentExecutionOptions,
@@ -132,7 +132,7 @@ export async function executeAgentAttempt(input: {
       tags,
     });
     const result = await workspace.wrapResult(rawResult);
-    if (!identity) return { kind: "live-unrecordable", result };
+    if (!identity || handle.interacted) return { kind: "live-unrecordable", result };
     if (!isReplayEnabled(replay) || !evidence) throw new Error("Replay identity produced without complete replay evidence.");
 
     const contract = await validateReplayIdentity({
@@ -156,7 +156,7 @@ export async function executeAgentAttempt(input: {
     if (
       workspace?.kind === "isolated"
       && liveStarted
-      && !rc.signal?.aborted
+      && (!rc.signal?.aborted || rc.signal.reason instanceof WorkflowAgentStoppedError)
       && !isWorkflowPauseError(error)
     ) {
       rc.worktrees.preserve(workspace.cwd);

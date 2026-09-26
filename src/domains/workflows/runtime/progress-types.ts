@@ -1,6 +1,6 @@
 import type { WorkflowUsageSnapshot } from "./usage.ts";
 
-export type AgentRowStatus = "queued" | "running" | "done" | "failed";
+export type AgentRowStatus = "queued" | "running" | "stopping" | "stopped" | "done" | "failed";
 export type AgentChatRole = "task" | "user" | "assistant" | "tool" | "status";
 export type WorkflowLaneItemStatus = "pending" | "running" | "success" | "warning" | "error";
 
@@ -15,6 +15,8 @@ export interface AgentRowSnapshot {
   readonly label: string;
   /** provider/id of the model actually routed to this agent. */
   readonly model?: string;
+  readonly modelName?: string;
+  readonly thinkingLevel?: string;
   readonly status: AgentRowStatus;
   readonly startedAt?: number;
   readonly doneAt?: number;

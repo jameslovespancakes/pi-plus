@@ -1,4 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { AgentTranscript } from "./live-agent.ts";
 import type { WorkflowProgressEvent } from "./types.ts";
 import type { AgentChatMessage, AgentChatRole, AgentRowStatus, WorkflowLaneItemStatus, WorkflowProgressSnapshot } from "./progress-types.ts";
 import type { WorkflowUsageSnapshot } from "./usage.ts";
@@ -23,6 +24,8 @@ interface AgentRow {
   id: number;
   label: string;
   model?: string;
+  modelName?: string;
+  thinkingLevel?: string;
   status: AgentRowStatus;
   startedAt?: number;
   doneAt?: number;
@@ -73,9 +76,11 @@ export class ProgressTracker {
   private readonly laneOverflow = new Map<string, number>();
   private readonly rowsById = new Map<number, AgentRow>();
   private readonly agentChats = new Map<number, AgentChatMessage[]>();
-  private readonly agentFollowUps = new Map<number, (message: string) => Promise<void>>();
+  private readonly agentTranscripts = new Map<number, () => AgentTranscript>();
+  private readonly agentStops = new Map<number, () => void>();
+  private readonly agentFollowUps = new Map<number, (message: string, steer?: boolean) => Promise<void>>();
   private readonly listeners = new Set<() => void>();
-  private readonly agentCounts: Record<AgentRowStatus, number> = { queued: 0, running: 0, done: 0, failed: 0 };
+  private readonly agentCounts: Record<AgentRowStatus, number> = { queued: 0, running: 0, stopping: 0, stopped: 0, done: 0, failed: 0 };
   private readonly startedAt = Date.now();
   private readonly laneItemLimit = laneItemLimitFromEnv();
   private doneAt: number | undefined;
@@ -161,9 +166,9 @@ export class ProgressTracker {
     this.publish();
   }
 
-  agentQueued(phase: string | undefined, label: string, model?: string): number {
+  agentQueued(phase: string | undefined, label: string, model?: string, modelName?: string, thinkingLevel?: string): number {
     const id = this.nextAgentId++;
-    const row = { label, model, id, status: "queued" as const, toolUses: 0 };
+    const row = { label, model, modelName, thinkingLevel, id, status: "queued" as const, toolUses: 0 };
     this.ensurePhase(phase ?? this.currentPhase).agents.push(row);
     this.rowsById.set(id, row);
     this.agentCounts.queued++;
@@ -208,7 +213,27 @@ export class ProgressTracker {
     this.publish();
   }
 
-  bindAgentFollowUp(id: number, send: (message: string) => Promise<void>): () => void {
+  bindAgentTranscript(id: number, read: () => AgentTranscript): () => void {
+    this.agentTranscripts.set(id, read);
+    return () => {
+      const last = read();
+      const snapshot = { ...last, messages: [...last.messages], streaming: undefined };
+      this.agentTranscripts.set(id, () => snapshot);
+    };
+  }
+
+  transcript(id: number): AgentTranscript | undefined {
+    return this.agentTranscripts.get(id)?.();
+  }
+
+  agentChanged(id: number, model?: string, modelName?: string, thinkingLevel?: string): void {
+    const row = this.rowsById.get(id);
+    if (row) Object.assign(row, { model, modelName, thinkingLevel });
+    // Stream updates are UI-only; do not rewrite the durable run on every token.
+    for (const listener of this.listeners) listener();
+  }
+
+  bindAgentFollowUp(id: number, send: (message: string, steer?: boolean) => Promise<void>): () => void {
     this.agentFollowUps.set(id, send);
     this.publish();
     return () => {
@@ -217,16 +242,32 @@ export class ProgressTracker {
     };
   }
 
+  bindAgentStop(id: number, stop: () => void): () => void {
+    this.agentStops.set(id, stop);
+    return () => this.agentStops.delete(id);
+  }
+
+  stopAgent(id: number): void {
+    const row = this.rowsById.get(id);
+    if (!row) throw new Error(`Unknown agent ${id}.`);
+    if (row.status !== "running" && row.status !== "queued") return;
+    const stop = this.agentStops.get(id);
+    if (!stop) throw new Error("Agent cannot be stopped right now.");
+    this.transitionAgentStatus(row, "stopping");
+    stop();
+    this.publish();
+  }
+
   conversation(id: number): readonly AgentChatMessage[] {
     return (this.agentChats.get(id) ?? []).map((message) => ({ ...message }));
   }
 
-  async followUp(id: number, message: string): Promise<void> {
-    const text = toDisplayLine(message, AGENT_CHAT_TEXT_LIMIT);
+  async followUp(id: number, message: string, steer = false): Promise<void> {
+    const text = message.trim();
     if (!text) throw new Error("Enter a follow-up message.");
     const send = this.agentFollowUps.get(id);
     if (!send) throw new Error("This agent is no longer accepting follow-ups.");
-    await send(text);
+    await send(text, steer);
     this.appendAgentChat(id, "user", text);
     this.publish();
   }
@@ -238,7 +279,7 @@ export class ProgressTracker {
 
   agentDone(label: string, id?: number): void {
     const row = this.findRow(label, id);
-    if (row && row.status !== "failed") {
+    if (row && (row.status === "running" || row.status === "queued")) {
       this.transitionAgentStatus(row, "done");
       row.doneAt = Date.now();
     }
@@ -248,7 +289,7 @@ export class ProgressTracker {
   agentFailed(label: string, error: unknown, id?: number): void {
     const row = this.findRow(label, id);
     if (row) {
-      this.transitionAgentStatus(row, "failed");
+      this.transitionAgentStatus(row, row.status === "stopping" ? "stopped" : "failed");
       row.doneAt = Date.now();
       row.error = toDisplayLine(unknownErrorMessage(error), AGENT_ERROR_DISPLAY_LIMIT) || "agent failed";
       this.appendAgentChat(row.id, "status", row.error);
@@ -288,10 +329,10 @@ export class ProgressTracker {
   private statusCountsSnapshot(): WorkflowStatusCounts {
     return {
       queued: this.agentCounts.queued,
-      running: this.agentCounts.running,
+      running: this.agentCounts.running + this.agentCounts.stopping,
       done: this.agentCounts.done,
-      failed: this.agentCounts.failed,
-      total: this.agentCounts.queued + this.agentCounts.running + this.agentCounts.done + this.agentCounts.failed,
+      failed: this.agentCounts.failed + this.agentCounts.stopped,
+      total: Object.values(this.agentCounts).reduce((sum, count) => sum + count, 0),
     };
   }
 
@@ -371,7 +412,6 @@ export class ProgressTracker {
     this.publishSnapshot();
     if (!this.ctx.hasUI) return;
     this.ctx.ui.setWidget(this.surfaceKey, undefined);
-    this.ctx.ui.setStatus(this.surfaceKey, undefined);
   }
 
   private publishSnapshot(): void {

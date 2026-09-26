@@ -1,7 +1,8 @@
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import { CustomEditor, getSelectListTheme, type KeybindingsManager, type Theme } from "@earendil-works/pi-coding-agent";
+import { AgentTranscriptView } from "./agent-transcript.ts";
 import {
   Box,
-  Input,
+  Editor,
   Markdown,
   matchesKey,
   Text,
@@ -16,21 +17,25 @@ import {
 import type { AgentChatMessage, AgentRowSnapshot, WorkflowProgressSnapshot } from "../progress-types.ts";
 import type { WorkflowProgressSource } from "../types.ts";
 import { unknownErrorMessage } from "../unknown-error.ts";
-import { formatWorkflowUsageLine } from "../usage.ts";
+import { agentModelName, thinkingLabel } from "./workflow-widget.ts";
 import { formatDuration, statusIcon, truncateDisplay } from "./workflow-format.ts";
 import {
   centerWorkflowViewerViewport,
   fitWorkflowViewerRow,
   fitWorkflowViewerRows,
-  workflowViewerHeight,
 } from "./workflow-viewer-layout.ts";
+
+export const WORKFLOW_INSPECTOR_OVERLAY_OPTIONS = {
+  overlay: true,
+  overlayOptions: { anchor: "center", width: "100%", maxHeight: "100%", margin: 0 },
+} as const;
 
 export interface WorkflowInspectorOutcome {
   readonly label: string;
   readonly text: string;
 }
 
-type WorkflowInspectorLiveSource = Pick<WorkflowProgressSource, "conversation" | "followUp">;
+type WorkflowInspectorLiveSource = Pick<WorkflowProgressSource, "conversation" | "followUp" | "stopAgent" | "transcript">;
 
 interface BoardAgent {
   readonly agent: AgentRowSnapshot;
@@ -45,6 +50,7 @@ interface BoardRow {
 /** Modal board for inspecting workflow agents and sending targeted follow-ups. */
 export class WorkflowInspector implements Focusable {
   private selected = 0;
+  private width = 0;
   private detailAgentId: number | undefined;
   private detailScroll = 0;
   private clickRows = new Map<number, number>();
@@ -52,7 +58,8 @@ export class WorkflowInspector implements Focusable {
   private followUpError: string | undefined;
   private sending = false;
   private _focused = false;
-  private readonly input: Input;
+  private readonly input: Editor;
+  private readonly transcriptViews = new Map<number, AgentTranscriptView>();
   private readonly snapshotProvider: () => WorkflowProgressSnapshot;
   private readonly tui: Pick<TUI, "requestRender" | "terminal">;
   private readonly theme: Theme;
@@ -67,6 +74,7 @@ export class WorkflowInspector implements Focusable {
     close: () => void,
     outcome?: WorkflowInspectorOutcome,
     live?: WorkflowInspectorLiveSource,
+    keybindings?: KeybindingsManager,
   ) {
     this.snapshotProvider = snapshotProvider;
     this.tui = tui;
@@ -74,11 +82,10 @@ export class WorkflowInspector implements Focusable {
     this.close = close;
     this.outcome = outcome;
     this.live = live;
-    this.input = new Input({
-      prompt: this.theme.fg("accent", "› "),
-      placeholder: "Send a follow-up to this agent…",
-      placeholderStyle: (text) => this.theme.fg("dim", text),
-    });
+    const editorTheme = { borderColor: (text: string) => this.theme.fg("border", text), selectList: getSelectListTheme() };
+    this.input = keybindings
+      ? new CustomEditor(tui as TUI, editorTheme, keybindings)
+      : new Editor(tui as TUI, editorTheme);
     this.input.onSubmit = (value) => void this.submitFollowUp(value);
   }
 
@@ -93,14 +100,16 @@ export class WorkflowInspector implements Focusable {
 
   handleInput(data: string): void {
     if (matchesKey(data, "escape") || (data === "q" && this.detailAgentId === undefined)) {
-      this.close();
+      if (this.detailAgentId !== undefined) this.closeDetails();
+      else this.close();
       return;
     }
 
     if (this.detailAgentId !== undefined) {
       if (matchesKey(data, "pageUp")) this.scrollChat(6);
       else if (matchesKey(data, "pageDown")) this.scrollChat(-6);
-      else if (matchesKey(data, "backspace") && this.input.getValue().length === 0) this.closeDetails();
+      else if (matchesKey(data, "backspace") && this.input.getText().length === 0) this.closeDetails();
+      else if (matchesKey(data, "alt+enter") && this.canMessageSelectedAgent()) void this.submitFollowUp(this.input.getText(), false);
       else if (this.canMessageSelectedAgent()) this.input.handleInput(data);
       this.tui.requestRender();
       return;
@@ -113,6 +122,7 @@ export class WorkflowInspector implements Focusable {
     else if (matchesKey(data, "pageDown")) this.select(this.selected + 8, count);
     else if (matchesKey(data, "home") || data === "g") this.select(0, count);
     else if (matchesKey(data, "end") || data === "G") this.select(count - 1, count);
+    else if (data === "x" || data === "X") this.stopSelectedAgent();
     else if (matchesKey(data, "return") || matchesKey(data, "enter") || data === " ") this.openDetails(count);
   }
 
@@ -123,7 +133,7 @@ export class WorkflowInspector implements Focusable {
         return { handled: true, focus: true, render: true };
       }
       if (event.type === "click" && event.button === "left" && event.y === this.inputRow && this.canMessageSelectedAgent()) {
-        const result = this.input.handleMouse({ ...event, y: 0 });
+        const result = this.input.handleMouse({ ...event, y: event.y - (this.inputRow ?? 0) });
         return { handled: true, focus: true, render: true, ...result };
       }
       return undefined;
@@ -143,6 +153,8 @@ export class WorkflowInspector implements Focusable {
   }
 
   render(width: number): string[] {
+    this.width = width;
+    if (!this.canInspect() && this.detailAgentId !== undefined) this.closeDetails();
     const outerWidth = Math.max(4, width);
     const innerWidth = Math.max(1, outerWidth - 4);
     const snapshot = this.snapshotProvider();
@@ -154,7 +166,7 @@ export class WorkflowInspector implements Focusable {
       : agents.find((entry) => entry.agent.id === this.detailAgentId);
     if (this.detailAgentId !== undefined && !selected) this.closeDetails();
 
-    const totalHeight = workflowViewerHeight(this.tui.terminal.rows);
+    const totalHeight = Math.max(3, this.tui.terminal.rows - 1);
     const innerHeight = Math.max(1, totalHeight - 2);
     const interior = selected
       ? this.chatInterior(selected, innerWidth, innerHeight)
@@ -196,7 +208,7 @@ export class WorkflowInspector implements Focusable {
       ` ${this.columns(width)}`,
       ...body,
       this.theme.fg("dim", "─".repeat(width)),
-      ` ${this.theme.fg("dim", `↑↓ select · click/enter inspect · ${viewport.percentage}% · esc close`)}`,
+      ` ${this.followUpError ? this.theme.fg("error", this.followUpError) : this.theme.fg("dim", `↑↓ select · ${this.canInspect() ? "enter inspect" : "resize to inspect (80×24)"} · X stop · esc back`)}`,
     ], height);
   }
 
@@ -207,35 +219,36 @@ export class WorkflowInspector implements Focusable {
   ): string[] {
     this.clickRows.clear();
     const { agent } = entry;
-    const bodyHeight = Math.max(0, height - 6);
+    const canMessage = agent.status === "running" && this.live !== undefined;
+    this.input.focused = this._focused && canMessage;
+    const editorLines = canMessage ? this.input.render(Math.max(1, width - 1))
+      : [this.theme.fg("dim", agent.status === "queued" ? "Agent has not started yet." : "Agent has finished.")];
+    const transcript = this.live?.transcript?.(agent.id);
+    const queue = [...(transcript?.steering ?? []), ...(transcript?.followUp ?? [])];
+    const queueLines = queue.length ? [this.theme.fg("dim", truncateDisplay(`Queued: ${queue.join(" · ")}`, width))] : [];
+    const bodyHeight = Math.max(0, height - 5 - editorLines.length - queueLines.length);
     const rows = this.chatRows(agent, width);
     const maxStart = Math.max(0, rows.length - bodyHeight);
     const start = Math.max(0, maxStart - this.detailScroll);
     const body = fitWorkflowViewerRows(rows.slice(start, start + bodyHeight), bodyHeight);
     const elapsed = agent.startedAt === undefined ? "queued" : formatDuration((agent.doneAt ?? Date.now()) - agent.startedAt);
     const details = [
-      shortModel(agent.model ?? "host default"),
-      entry.phase,
+      agentModelName(agent),
+      thinkingLabel(agent.thinkingLevel),
       elapsed,
-      `${agent.toolUses} tool${agent.toolUses === 1 ? "" : "s"}`,
     ].join(this.theme.fg("dim", " · "));
-    const canMessage = agent.status === "running" && this.live !== undefined;
-    this.input.focused = this._focused && canMessage;
-    this.inputRow = canMessage ? height - 1 : undefined;
-    const inputLine = canMessage
-      ? this.input.render(Math.max(1, width - 1))[0] ?? ""
-      : this.theme.fg("dim", agent.status === "queued" ? "Agent has not started yet." : "Agent has finished.");
+    this.inputRow = canMessage ? 4 + bodyHeight + queueLines.length : undefined;
     const help = this.followUpError
       ? this.theme.fg("error", truncateDisplay(this.followUpError, Math.max(1, width - 1)))
-      : this.theme.fg("dim", "enter send · page up/down scroll · backspace agents · esc close");
+      : this.theme.fg("dim", "enter steer · alt+enter queue · /model · /thinking · esc back");
 
     return fitWorkflowViewerRows([
       ` ${statusIcon(agent.status, this.theme)} ${this.theme.fg("accent", this.theme.bold(agent.label))}`,
       ` ${details}`,
       this.theme.fg("dim", "─".repeat(width)),
       ...body,
-      this.theme.fg("dim", "─".repeat(width)),
-      ` ${inputLine}`,
+      ...queueLines,
+      ...editorLines,
       ` ${help}`,
     ], height);
   }
@@ -250,8 +263,23 @@ export class WorkflowInspector implements Focusable {
     this.tui.requestRender();
   }
 
+  private canInspect(): boolean {
+    return this.width >= 80 && this.tui.terminal.rows >= 24;
+  }
+
+  private stopSelectedAgent(): void {
+    const agent = this.agents()[this.selected]?.agent;
+    if (!agent || !this.live?.stopAgent) return;
+    try {
+      this.live.stopAgent(agent.id);
+    } catch (error) {
+      this.followUpError = unknownErrorMessage(error);
+    }
+    this.tui.requestRender();
+  }
+
   private openDetails(count: number): void {
-    if (count === 0) return;
+    if (count === 0 || !this.canInspect()) return;
     const entry = this.agents()[this.selected];
     if (!entry) return;
     this.detailAgentId = entry.agent.id;
@@ -265,7 +293,7 @@ export class WorkflowInspector implements Focusable {
     this.detailAgentId = undefined;
     this.detailScroll = 0;
     this.followUpError = undefined;
-    this.input.setValue("");
+    this.input.setText("");
     this.input.focused = false;
     this.tui.requestRender();
   }
@@ -280,20 +308,20 @@ export class WorkflowInspector implements Focusable {
     return this.agents().some((entry) => entry.agent.id === this.detailAgentId && entry.agent.status === "running");
   }
 
-  private async submitFollowUp(value: string): Promise<void> {
+  private async submitFollowUp(value: string, steer = true): Promise<void> {
     const message = value.trim();
     const agentId = this.detailAgentId;
     if (!message || agentId === undefined || !this.live || this.sending) return;
     this.sending = true;
     this.followUpError = undefined;
-    this.input.setValue("");
+    this.input.setText("");
     this.tui.requestRender();
     try {
-      await this.live.followUp(agentId, message);
+      await this.live.followUp(agentId, message, steer);
       this.detailScroll = 0;
     } catch (error) {
       this.followUpError = unknownErrorMessage(error);
-      this.input.setValue(message);
+      this.input.setText(message);
     } finally {
       this.sending = false;
       this.tui.requestRender();
@@ -319,6 +347,12 @@ export class WorkflowInspector implements Focusable {
   }
 
   private chatRows(agent: AgentRowSnapshot, width: number): string[] {
+    const transcript = this.live?.transcript?.(agent.id);
+    if (transcript) {
+      let view = this.transcriptViews.get(agent.id);
+      if (!view) { view = new AgentTranscriptView(); this.transcriptViews.set(agent.id, view); }
+      return view.render(transcript, width, this.tui as TUI, transcript.cwd ?? process.cwd());
+    }
     const messages = this.live?.conversation(agent.id) ?? [];
     if (messages.length === 0) return [` ${this.theme.fg("dim", "Waiting for agent activity…")}`];
     return messages.flatMap((message) => this.chatMessageRows(message, width));
@@ -381,8 +415,8 @@ export class WorkflowInspector implements Focusable {
     const modelWidth = Math.max(12, Math.floor(width * 0.28));
     const activityWidth = Math.max(8, width - taskWidth - modelWidth - 7);
     const task = this.cell(agent.label, taskWidth, agent.status === "failed" ? "error" : "text");
-    const model = this.cell(shortModel(agent.model ?? "host default"), modelWidth, "muted");
-    const activity = this.cell(agentActivity(agent), activityWidth, agent.status === "failed" ? "error" : "dim");
+    const model = this.cell(agentModelName(agent), modelWidth, "muted");
+    const activity = this.cell(thinkingLabel(agent.thinkingLevel), activityWidth, "dim");
     const row = `${marker} ${statusIcon(agent.status, this.theme)} ${task} ${model} ${activity}`;
     return selected ? this.theme.bg("selectedBg", fitWorkflowViewerRow(row, width)) : fitWorkflowViewerRow(row, width);
   }
@@ -390,21 +424,15 @@ export class WorkflowInspector implements Focusable {
   private columns(width: number): string {
     const taskWidth = Math.max(12, Math.floor(width * 0.36));
     const modelWidth = Math.max(12, Math.floor(width * 0.28));
-    return this.theme.fg("dim", `  ${"Task".padEnd(taskWidth + 2)}${"Model".padEnd(modelWidth + 1)}Activity`);
+    return this.theme.fg("dim", `  ${"Task".padEnd(taskWidth + 2)}${"Model".padEnd(modelWidth + 1)}Thinking`);
   }
 
   private summary(snapshot: WorkflowProgressSnapshot, agents: readonly BoardAgent[]): string {
-    const counts = { queued: 0, running: 0, done: 0, failed: 0 };
-    for (const { agent } of agents) counts[agent.status]++;
+    const done = agents.filter(({ agent }) => agent.status === "done").length;
     const parts = [
-      this.theme.fg("accent", snapshot.currentPhase),
-      `${counts.running} running`,
-      `${counts.queued} queued`,
-      this.theme.fg("success", `${counts.done} done`),
-      ...(counts.failed > 0 ? [this.theme.fg("error", `${counts.failed} failed`)] : []),
+      `${done}/${agents.length} done`,
       formatDuration((snapshot.doneAt ?? Date.now()) - snapshot.startedAt),
-      formatWorkflowUsageLine(snapshot.usage) ?? "",
-    ].filter(Boolean);
+    ];
     return parts.join(this.theme.fg("dim", " · "));
   }
 
@@ -418,18 +446,4 @@ export class WorkflowInspector implements Focusable {
     const padding = " ".repeat(Math.max(0, width - visibleWidth(fitted)));
     return `${this.theme.fg("border", "│")} ${fitted}${padding} ${this.theme.fg("border", "│")}`;
   }
-}
-
-function shortModel(model: string): string {
-  return model.replace(/^openai-codex\//, "codex/").replace(/^anthropic\//, "");
-}
-
-function agentActivity(agent: AgentRowSnapshot): string {
-  if (agent.status === "queued") return "queued";
-  if (agent.status === "failed") return agent.error ?? "failed";
-  const parts: string[] = [];
-  if (agent.lastTool) parts.push(agent.lastTool);
-  if (agent.toolUses > 0) parts.push(`${agent.toolUses} tool${agent.toolUses === 1 ? "" : "s"}`);
-  if (agent.startedAt !== undefined) parts.push(formatDuration((agent.doneAt ?? Date.now()) - agent.startedAt));
-  return parts.join(" · ") || agent.status;
 }

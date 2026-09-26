@@ -1,7 +1,8 @@
+import { assertAgentOptions } from "./agent-options.ts";
 import { assertWorkflowBudgetAvailable } from "./budget.ts";
 import { combinedAgentAttemptError } from "./agent-failure.ts";
 import { WorkflowAgentTimeoutError } from "./agent-limits.ts";
-import { abortReason, linkAbortSignal, throwIfAborted } from "./cancellation.ts";
+import { abortReason, linkAbortSignal, throwIfAborted, WorkflowAgentStoppedError } from "./cancellation.ts";
 import { executeAgentAttempt } from "./agent-attempt.ts";
 import {
   createAgentReplayPlan,
@@ -53,7 +54,8 @@ export async function runAgent(
     throw new Error(`agent() prompt must be a string; received ${describeAgentPrompt(prompt)}`);
   }
 
-  const label = opts.label ?? "agent";
+  assertAgentOptions(opts);
+  const label = opts.label;
   const phase = opts.phase ?? "Workflow";
   const tags: AgentRunTags = { label, phase };
 
@@ -62,14 +64,15 @@ export async function runAgent(
     const routing = resolveAgentRouting(rc, opts, label);
     const effectiveOpts = routing.thinkingLevel === opts.thinkingLevel
       ? opts
-      : { ...opts, thinkingLevel: routing.thinkingLevel };
+      : { ...opts, thinkingLevel: routing.thinkingLevel ?? opts.thinkingLevel };
     const replay = createAgentReplayPlan(prompt, effectiveOpts);
     if (!isReplayEnabled(replay)) assertWorkflowBudgetAvailable(rc.budget);
 
     const modelLabel = describeAgentModel(routing.model);
-    const rowId = rc.progress.agentQueued(opts.phase, label, modelLabel);
+    const rowId = rc.progress.agentQueued(opts.phase, label, modelLabel, routing.model?.name, effectiveOpts.thinkingLevel);
     rc.progress.agentMessage(rowId, "task", prompt);
     const liveScope = createAgentLiveScope(rc, label);
+    const unbindStop = rc.progress.bindAgentStop?.(rowId, liveScope.stop);
     try {
       return await rc.semaphore.run(
         async () => {
@@ -129,18 +132,20 @@ export async function runAgent(
               }
               continue;
             }
+            throwIfAborted(agentRc.signal);
             const settlement = await settleAgentAttempt({ rc: agentRc, label, tags, replay: attemptPlan, outcome });
             if (settlement.kind === "retry-live") {
               attemptPlan = { kind: "off" };
               continue;
             }
+            throwIfAborted(agentRc.signal);
             rc.progress.agentDone(label, rowId);
             return settlement.result;
           }
         },
         {
           onQueueWaitMs: (durationMs) => rc.perf.observe("agent.queue_wait_ms", durationMs, tags),
-          signal: rc.signal,
+          signal: liveScope.signal,
         },
       );
     } catch (error) {
@@ -151,6 +156,7 @@ export async function runAgent(
       rc.progress.log(`${label} failed: ${unknownErrorMessage(failure)}`);
       throw failure;
     } finally {
+      unbindStop?.();
       liveScope.dispose();
     }
   }, tags);
@@ -164,6 +170,8 @@ function createAgentLiveScope(rc: RunContext, label: string) {
 
   return {
     signal: controller.signal,
+    // A local stop is recoverable by parallel(); it must not abort sibling agents.
+    stop: () => controller.abort(new WorkflowAgentStoppedError(`Agent ${label} stopped by user.`)),
     reserve() {
       const reservation = rc.agentLimiter.reserve(controller.signal);
       let committed = false;
@@ -194,7 +202,7 @@ function resolveAgentRouting(
   rc: RunContext,
   opts: AgentExecutionOptions,
   label: string,
-): { readonly model: ResolvedAgentModel["model"]; readonly thinkingLevel: AgentExecutionOptions["thinkingLevel"] } {
+): { readonly model: ResolvedAgentModel["model"]; readonly thinkingLevel: AgentExecutionOptions["thinkingLevel"] | undefined } {
   try {
     return resolveAgentModelProfile(
       {

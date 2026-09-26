@@ -124,7 +124,8 @@ boundary, including workflow subagents—not just through prompt instructions.
 
 **Turn repeatable tasks into coordinated agent runs.** Built-in reviews,
 diagnostics, research, and refactoring workflows support parallel agents,
-worktree isolation, replay, background execution, and usage accounting.
+worktree isolation, replay, and usage accounting. Every run returns immediately;
+results arrive when it finishes. There is no separate foreground/background mode.
 
 ```text
  Task → parallel agents → findings → result
@@ -135,8 +136,25 @@ worktree isolation, replay, background execution, and usage accounting.
 /workflow research "Compare the available approaches"
 ```
 
-**`/workflow`** opens the running agent board. Limits on concurrency, agents,
-time, and output tokens are optional; set them when needed.
+**`/workflow`** opens the running agent board. Enter inspects, Esc goes back,
+and X stops the selected agent from the list. Inspection needs at least 80×24.
+The inspector uses pi's native message/tool rendering and editor. Enter steers;
+Alt+Enter queues a follow-up. `/model provider/model` and `/thinking level`
+affect only that agent. Other parent-session commands are not forwarded.
+
+Every `api.agent()` call requires `label`, `model`, and `thinkingLevel`.
+Built-ins resolve explicit routes with `api.modelProfile("small" | "medium")`;
+configure both routes in `.pi/workflow-models.json` (or the agent-directory
+`workflow-models.json`), each with `model: "provider/model-id"` and
+`thinkingLevel`. Missing routes now fail rather than inheriting the host model.
+The file shape is `{ "profiles": { "small": { "model": "provider/model-id",
+"thinkingLevel": "low" }, "medium": { "model": "provider/model-id",
+"thinkingLevel": "high" } } }`.
+
+The main agent can use `workflow({ action: "list" })`, or `inspect`/`stop` with
+`runId` and optionally `agentId`. Activity is fetched on demand, not injected
+into every turn. Limits on concurrency, agents, time, and output tokens remain
+optional.
 
 ## Remote Workers
 

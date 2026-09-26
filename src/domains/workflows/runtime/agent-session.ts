@@ -1,3 +1,5 @@
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { sendAgentInput, type AgentTranscript } from "./live-agent.ts";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import {
   createAgentSessionFromServices,
@@ -45,7 +47,9 @@ export interface ResolvedAgentModel {
 }
 
 export interface AgentSessionHandle {
+  interacted?: boolean;
   readonly session: AgentRunnerSession;
+  readonly cwd?: string;
   readonly selectedSkills: readonly Skill[];
   hasStructuredResult(): boolean;
   structuredResult(): unknown;
@@ -124,6 +128,7 @@ export async function openAgentSession(input: {
     throwIfAborted(rc.signal);
     return {
       session,
+      cwd,
       selectedSkills: resources.selectedSkills,
       hasStructuredResult: () => captured,
       structuredResult: () => structuredResult,
@@ -149,13 +154,38 @@ export async function promptAgentSession(input: {
 }): Promise<unknown> {
   const { rc, handle, prompt, opts, label, rowId, tags } = input;
   const { session } = handle;
-  const unbindFollowUp = rc.progress.bindAgentFollowUp(rowId, async (message) => {
-    if (!session.isStreaming) throw new Error("This agent has already finished its current turn.");
-    await session.followUp(message);
+  let streaming: AgentMessage | undefined;
+  const toolUpdates = new Map<string, NonNullable<AgentTranscript["toolUpdates"]> extends ReadonlyMap<string, infer V> ? V : never>();
+  const refresh = () => rc.progress.agentChanged?.(rowId,
+    session.model ? `${session.model.provider}/${session.model.id}` : undefined,
+    session.model?.name, session.thinkingLevel);
+  const unbindTranscript = rc.progress.bindAgentTranscript?.(rowId, () => ({
+    messages: session.messages, streaming, cwd: handle.cwd, toolUpdates,
+    steering: session.getSteeringMessages?.() ?? [],
+    followUp: session.getFollowUpMessages?.() ?? [],
+  }));
+  const unbindFollowUp = rc.progress.bindAgentFollowUp(rowId, async (message, steer) => {
+    await sendAgentInput(session, rc, message, steer);
+    handle.interacted = true;
+    refresh();
   });
   const unsubscribe = session.subscribe((event) => {
+    if (event.type === "message_update" || event.type === "message_start") streaming = event.message;
+    if (event.type === "message_end") streaming = undefined;
+    if (event.type === "tool_execution_update") {
+      toolUpdates.set(event.toolCallId, { result: event.partialResult, isPartial: true, isError: false });
+    } else if (event.type === "tool_execution_end") {
+      toolUpdates.set(event.toolCallId, { result: event.result, isPartial: false, isError: event.isError });
+    }
+    refresh();
+    if (event.type === "tool_execution_end") {
+      const output = event.result.content.filter((part: { type: string }) => part.type === "text")
+        .map((part: { text?: string }) => part.text ?? "").join("\n");
+      rc.progress.agentMessage(rowId, "tool", `${event.toolName}: ${output}`);
+    }
     if (event.type === "tool_execution_start" && event.toolName !== undefined && event.toolName !== FINAL_TOOL) {
       rc.progress.agentTool(label, event.toolName, rowId);
+      rc.progress.agentMessage(rowId, "tool", `${event.toolName} ${JSON.stringify(event.args)}`);
       return;
     }
     if (event.type === "message_end" && event.message.role === "assistant") {
@@ -217,6 +247,7 @@ export async function promptAgentSession(input: {
       unlinkPromptAbort();
     }
   } finally {
+    unbindTranscript?.();
     unbindFollowUp();
     unsubscribe();
   }

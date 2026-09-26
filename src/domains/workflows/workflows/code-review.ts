@@ -119,7 +119,7 @@ export default async function run(api: WorkflowApi, dependencies: CodeReviewDepe
       "Then: list the changed files, summarize the change in one paragraph (mention the PR if one was found), " +
       "and read any relevant AGENTS.md or project docs noting conventions a reviewer should know.\n" +
       "Return diffCommand exactly as a reviewer should run it. Structured output only.",
-    { phase: "Scope", label: "scope", tools: DEFAULT_ADVISORY_TOOLS, toolHints: DEFAULT_ADVISORY_TOOL_HINTS, profile: "medium", schema: ScopeSchema },
+    { phase: "Scope", label: "scope", tools: DEFAULT_ADVISORY_TOOLS, toolHints: DEFAULT_ADVISORY_TOOL_HINTS, ...api.modelProfile("medium"), schema: ScopeSchema },
   );
 
   if (!scope) {

@@ -5,8 +5,7 @@ import { Text, type AutocompleteItem } from "@earendil-works/pi-tui";
 import { isAdvisoryReport } from "./runtime/advisory-schema.ts";
 import type { WorkflowProgressSnapshot } from "./runtime/progress-types.ts";
 import type { LoadedWorkflow, WorkflowProgressSource, WorkflowRef, WorkflowRunMetadata, WorkflowRunOptions } from "./runtime/types.ts";
-import { WorkflowInspector } from "./runtime/ui/workflow-inspector.ts";
-import { WORKFLOW_VIEWER_OVERLAY_OPTIONS } from "./runtime/ui/workflow-viewer-layout.ts";
+import { WorkflowInspector, WORKFLOW_INSPECTOR_OVERLAY_OPTIONS } from "./runtime/ui/workflow-inspector.ts";
 import type { PerfSink } from "./runtime/perf.ts";
 import type { WorkflowUsageSnapshot } from "./runtime/usage.ts";
 import { ADAPTIVE_WORKFLOW_GUIDANCE, registerDynamax } from "./runtime/dynamax.ts";
@@ -37,8 +36,7 @@ import {
   WORKFLOW_USAGE_LIMIT_DELAY_MIN_MS,
 } from "./runtime/options.ts";
 import { executeWorkflowInvocation, type WorkflowExecution, type WorkflowPerfDetails } from "./runtime/workflow-execution.ts";
-import { BackgroundWorkflowCoordinator } from "./runtime/background-workflows.ts";
-import { backgroundUnavailableResult, startBackgroundWorkflowTool } from "./runtime/background-workflow-tool.ts";
+import { WorkflowLifecycle, workflowUnavailableResult } from "./runtime/workflow-lifecycle.ts";
 import { WorkflowRunController } from "./runtime/workflow-run-controller.ts";
 import { completeCurrentArgument, splitArgumentPrefix } from "./runtime/command-completions.ts";
 import { assertSupportedPiVersion } from "./runtime/pi-compat.ts";
@@ -132,7 +130,6 @@ export async function resolveWorkflowRef(ref: WorkflowRef, perf?: PerfSink): Pro
 }
 
 const WORKFLOW_OPTION_COMPLETIONS = [
-  { value: "--inspect", description: "Open the live workflow inspector" },
   { value: "--refresh", description: "Refresh dynamic workflow discovery" },
   { value: "--perf", description: "Collect workflow performance metrics" },
   { value: "--result-viewer", description: "Open supported result viewers" },
@@ -195,9 +192,10 @@ export async function openWorkflowInspector(ctx: ExtensionContext, inspection: A
           () => done(undefined),
           undefined,
           source,
+          _keybindings,
         );
       },
-      WORKFLOW_VIEWER_OVERLAY_OPTIONS,
+      WORKFLOW_INSPECTOR_OVERLAY_OPTIONS,
     );
   } finally {
     unsubscribe?.();
@@ -263,7 +261,7 @@ function parseWorkflowOptions(input: string): { args: string; options: WorkflowR
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
     if (token === "--inspect") {
-      options.inspect = true;
+      optionErrors.push("--inspect was removed; open the running workflow with /workflow");
       continue;
     }
     if (token === "--refresh") {
@@ -413,7 +411,6 @@ export interface WorkflowToolRequestParams {
   readonly name?: string;
   readonly script?: string;
   readonly resumeFromRunId?: string;
-  readonly background?: boolean;
 }
 
 export type WorkflowToolRequest =
@@ -443,44 +440,6 @@ export function invalidWorkflowInvocationResult(): WorkflowToolErrorResult {
 
 export function inlineCompileErrorResult(message: string): WorkflowToolErrorResult {
   return { content: [{ type: "text", text: `Inline workflow did not compile: ${message}` }], details: { error: "inline_compile_error", message } };
-}
-
-export async function sendWorkflowResult(
-  pi: ExtensionAPI,
-  ctx: ExtensionContext,
-  name: string,
-  mod: LoadedWorkflow,
-  args: string,
-  options: WorkflowRunOptions,
-  perfRecorder?: PerfSink,
-  reviewSessions: ReviewSessionCoordinator = createReviewSessionCoordinator(pi),
-): Promise<void> {
-  await sendResolvedWorkflowResult(
-    pi,
-    ctx,
-    name,
-    mod,
-    args,
-    resolveWorkflowRunOptions(options),
-    perfRecorder,
-    reviewSessions,
-  );
-}
-
-async function sendResolvedWorkflowResult(
-  pi: ExtensionAPI,
-  ctx: ExtensionContext,
-  name: string,
-  mod: LoadedWorkflow,
-  args: string,
-  options: ResolvedWorkflowRunOptions,
-  perfRecorder: PerfSink | undefined,
-  reviewSessions: ReviewSessionCoordinator,
-): Promise<void> {
-  const execution = await executeResolvedWorkflow(pi, ctx, name, mod, args, options, perfRecorder);
-  reviewSessions.remember(ctx, execution, options);
-  sendWorkflowExecution(pi, execution);
-  await reviewSessions.present(ctx, execution, options);
 }
 
 async function executeResolvedWorkflow(
@@ -548,8 +507,8 @@ function createReviewSessionCoordinator(pi: ExtensionAPI): ReviewSessionCoordina
 export default function workflowEngine(pi: ExtensionAPI, shortcuts: DynamaxShortcuts = resolveDynamaxShortcuts()): void {
   assertSupportedPiVersion(VERSION);
   const reviewSessions = createReviewSessionCoordinator(pi);
-  const backgroundWorkflows = new BackgroundWorkflowCoordinator(pi);
-  const workflowRuns = new WorkflowRunController(backgroundWorkflows, {
+  const lifecycle = new WorkflowLifecycle(pi);
+  const workflowRuns = new WorkflowRunController(lifecycle, {
     async resolveWorkflow(name) {
       const { discoverWorkflows } = await loadDiscovery();
       return (await discoverWorkflows(EXTENSION_DIR)).get(name);
@@ -560,18 +519,18 @@ export default function workflowEngine(pi: ExtensionAPI, shortcuts: DynamaxShort
       reviewSessions.remember(ctx, execution, options);
     },
   });
-  backgroundWorkflows.onRunSettled((ctx, runId) => workflowRuns.runSettled(ctx, runId));
+  lifecycle.onRunSettled((ctx, runId) => workflowRuns.runSettled(ctx, runId));
   registerDynamax(pi, shortcuts, { openInspector: (ctx) => openAvailableWorkflowInspector(pi, ctx) });
   pi.on("session_start", async (_event, ctx) => {
-    await backgroundWorkflows.sessionStarted(ctx);
+    await lifecycle.sessionStarted(ctx);
     await workflowRuns.sessionStarted(ctx);
   });
   pi.on("agent_settled", async (_event, ctx) => {
-    await backgroundWorkflows.agentSettled(ctx);
+    await lifecycle.agentSettled(ctx);
   });
   pi.on("session_shutdown", async (_event, ctx) => {
     workflowRuns.sessionShutdown(ctx);
-    await backgroundWorkflows.sessionShutdown(ctx);
+    await lifecycle.sessionShutdown(ctx);
     const key = sessionKey(ctx);
     workflowInspections.get(pi)?.delete(key);
     reviewSessions.dispose(ctx);
@@ -619,24 +578,36 @@ export default function workflowEngine(pi: ExtensionAPI, shortcuts: DynamaxShort
         ctx.ui.notify(`Unknown workflow "${direct.name}". Available: ${available}`, "error");
         return;
       }
-      await sendResolvedWorkflowResult(pi, ctx, direct.name, mod, direct.args, directOptions, perfRecorder, reviewSessions);
+      const unavailable = workflowUnavailableResult(ctx.mode);
+      if (unavailable) {
+        ctx.ui.notify(unavailable.content[0].text, "warning");
+        return;
+      }
+      const started = await lifecycle.launch({
+        ctx, name: direct.name, options: directOptions,
+        async execute(runCtx, options) {
+          const execution = await executeResolvedWorkflow(pi, runCtx, direct.name, mod, direct.args, options, perfRecorder);
+          reviewSessions.remember(ctx, execution, options);
+        },
+      });
+      ctx.ui.notify(started.content[0].text, started.details.error ? "error" : "info");
     },
   });
 
-  registerWorkflowTool(pi, reviewSessions, backgroundWorkflows);
+  registerWorkflowTool(pi, reviewSessions, lifecycle);
 }
 
 /** Register the host-facing workflow tool independently from command and lifecycle surfaces. */
 function registerWorkflowTool(
   pi: ExtensionAPI,
   reviewSessions: ReviewSessionCoordinator,
-  backgroundWorkflows: BackgroundWorkflowCoordinator,
+  lifecycle: WorkflowLifecycle,
 ): void {
   pi.registerTool({
     name: "workflow",
     label: "Workflow",
     description:
-      "ONLY call workflow when the user opted in with the literal token `dynamax`, explicitly requested a workflow, or invoked a command or skill that requires one. Runs named or inline multi-agent workflows synchronously or in the background.",
+      "ONLY call workflow when the user opted in with the literal token `dynamax`, explicitly requested a workflow, or invoked a command or skill that requires one. Starts named or inline multi-agent workflows and returns a run ID immediately. Use list, inspect, or stop to manage runs and individual agents.",
     promptSnippet: "Run an existing named workflow or an inline one-off workflow script",
     promptGuidelines: [
       "Use workflow only after a `dynamax` opt-in, an explicit workflow request, or a command or skill instruction.",
@@ -650,12 +621,16 @@ function registerWorkflowTool(
       "If an inline subagent needs grep/find/code-search helpers, use `tools: [\"read\", \"bash\", \"grep\", \"find\", \"ls\"]` plus `toolHints: [\"search\"]` so installed tools such as ast-grep, mgrep, ffgrep, or fffind are discovered dynamically.",
       "`api.budget` exposes `{ total, spent(), remaining() }` (output tokens). When the run is budgeted, scale fleets from `budget.total` and guard loops with `while (budget.total && budget.remaining() > N) { await api.agent(...) }`; `api.agent()` throws once the ceiling is reached.",
       ADAPTIVE_WORKFLOW_GUIDANCE,
-      "Set background: true only when the user explicitly wants the workflow to continue after this tool call; the tool returns a durable run ID and completion is delivered later.",
-      "Set autoResumeOnUsageLimit: true only for an explicitly backgrounded workflow when the user wants bounded automatic continuation after a recognized provider usage window.",
+      "All runs return a durable run ID immediately; completion is delivered later. Use action list/inspect/stop to observe or cancel without launching another workflow.",
+      "Every api.agent() call must explicitly supply label, model, and thinkingLevel; no implicit host model or thinking defaults.",
+      "Set autoResumeOnUsageLimit: true only when the user wants bounded automatic continuation after a recognized provider usage window.",
       "Set resumeEditedWorkflow: true only with resumeFromRunId when the user explicitly accepts reusing behaviorally identical calls after workflow source edits.",
-      "Every workflow tool call must provide exactly one of `name` or `script`, never both.",
+      "Launch calls must provide exactly one of name or script. Management calls use action, runId, and optionally agentId instead.",
     ],
     parameters: Type.Object({
+      action: Type.Optional(Type.Union([Type.Literal("start"), Type.Literal("list"), Type.Literal("inspect"), Type.Literal("stop")], { description: "Defaults to start. Management actions do not launch a workflow." })),
+      runId: Type.Optional(Type.String({ minLength: 1, description: "Run to inspect or stop" })),
+      agentId: Type.Optional(Type.Integer({ minimum: 1, description: "Inspect or stop only this agent" })),
       name: Type.Optional(Type.String({ description: "Workflow name, e.g. code-review. Provide exactly one of name or script." })),
       script: Type.Optional(Type.String({ description: "Inline workflow script. Provide exactly one of script or name." })),
       args: Type.Optional(Type.String({ description: "Arguments for the workflow (e.g. target or focus)" })),
@@ -677,7 +652,7 @@ function registerWorkflowTool(
         }),
       ),
       autoResumeOnUsageLimit: Type.Optional(
-        Type.Boolean({ description: "For a background run, opt into bounded automatic resume after a recognized provider usage limit" }),
+        Type.Boolean({ description: "Opt into bounded automatic resume after a recognized provider usage limit" }),
       ),
       usageLimitMaxAttempts: Type.Optional(
         Type.Integer({
@@ -705,17 +680,16 @@ function registerWorkflowTool(
       resumeEditedWorkflow: Type.Optional(
         Type.Boolean({ description: "With resumeFromRunId, ignore only workflow-source fingerprint changes while retaining all other replay checks" }),
       ),
-      background: Type.Optional(Type.Boolean({ description: "Return a durable run ID immediately and deliver completion to this conversation later" })),
     }),
     renderCall(args, theme) {
       const suffix = args.args ? ` ${theme.fg("dim", args.args)}` : "";
-      const background = args.background ? ` ${theme.fg("dim", "(background)")}` : "";
+      if (args.action && args.action !== "start") return new Text(`▸ ${theme.fg("toolTitle", "workflow")} ${args.action} ${args.runId ?? ""}`, 0, 0);
       if (args.name?.trim()) {
-        return new Text(`▸ ${theme.fg("toolTitle", theme.bold("workflow"))} ${theme.fg("accent", args.name.trim())}${background}${suffix}`, 0, 0);
+        return new Text(`▸ ${theme.fg("toolTitle", theme.bold("workflow"))} ${theme.fg("accent", args.name.trim())}${suffix}`, 0, 0);
       }
       const preview = compactInlinePreview(args.script);
       const previewSuffix = preview ? ` ${theme.fg("dim", preview)}` : "";
-      return new Text(`▸ ${theme.fg("toolTitle", theme.bold("workflow"))} ${theme.fg("accent", "inline")}${background}${suffix}${previewSuffix}`, 0, 0);
+      return new Text(`▸ ${theme.fg("toolTitle", theme.bold("workflow"))} ${theme.fg("accent", "inline")}${suffix}${previewSuffix}`, 0, 0);
     },
     renderResult(result, { expanded, isPartial }, theme) {
       if (isPartial) return new Text(theme.fg("accent", "Running workflow…"), 0, 0);
@@ -731,6 +705,13 @@ function registerWorkflowTool(
       return new Text(theme.fg("muted", text), 0, 0);
     },
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      if (params.action && params.action !== "start") {
+        const { manageWorkflow } = await import("./runtime/workflow-management.ts");
+        return await manageWorkflow({ ...params, action: params.action }, ctx, lifecycle, workflowInspectionState(pi, ctx).active);
+      }
+      if (params.runId !== undefined || params.agentId !== undefined) {
+        return { content: [{ type: "text", text: "runId and agentId require inspect or stop." }], details: { error: "invalid_workflow_invocation" } };
+      }
       const request = normalizeWorkflowToolRequest(params);
       if (request.kind === "error") return invalidWorkflowInvocationResult();
       const resumeFromRunId = params.resumeFromRunId?.trim();
@@ -746,13 +727,10 @@ function registerWorkflowTool(
           details: { error: "invalid_edited_workflow_resume" },
         };
       }
-      if (params.background) {
-        const unavailable = backgroundUnavailableResult(ctx.mode);
-        if (unavailable) return unavailable;
-      }
+      const unavailable = workflowUnavailableResult(ctx.mode);
+      if (unavailable) return unavailable;
 
       const runOptions = resolveWorkflowRunOptions({
-        inspect: ctx.hasUI && ctx.mode === "tui",
         concurrency: params.concurrency,
         parallelSubmissionLimit: params.parallelSubmissionLimit,
         maxAgents: params.maxAgents,
@@ -796,41 +774,15 @@ function registerWorkflowTool(
       }
 
       const resultArgs = params.args ?? "";
-      if (params.background) {
-        return await startBackgroundWorkflowTool({
-          coordinator: backgroundWorkflows,
-          ctx,
-          name: resultName,
-          options: runOptions,
-          async execute(backgroundCtx, backgroundOptions) {
-            const execution = await executeResolvedWorkflow(
-              pi,
-              backgroundCtx,
-              resultName,
-              mod,
-              resultArgs,
-              backgroundOptions,
-              perfRecorder,
-            );
-            reviewSessions.remember(ctx, execution, backgroundOptions);
-          },
-        });
-      }
-      const execution = await executeResolvedWorkflow(pi, ctx, resultName, mod, resultArgs, runOptions, perfRecorder);
-      reviewSessions.remember(ctx, execution, runOptions);
-      return {
-        content: [{
-          type: "text",
-          text: formatMessageContent(
-            resultName,
-            execution.envelope.result,
-            execution.envelope.usage,
-            execution.envelope.perf,
-            execution.metadata,
-          ),
-        }],
-        details: execution.envelope,
-      };
+      return await lifecycle.launch({
+        ctx,
+        name: resultName,
+        options: runOptions,
+        async execute(runCtx, options) {
+          const execution = await executeResolvedWorkflow(pi, runCtx, resultName, mod, resultArgs, options, perfRecorder);
+          reviewSessions.remember(ctx, execution, options);
+        },
+      });
     },
   });
 }

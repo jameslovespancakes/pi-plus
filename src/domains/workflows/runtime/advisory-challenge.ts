@@ -41,7 +41,7 @@ export function needsChallenge(finding: AdvisoryVerified): boolean {
 
 /** A bounded recipe using existing agent/parallel calls, not a new runtime primitive. */
 export async function challengeFindings<T extends AdvisoryVerified>(
-  api: Pick<WorkflowApi, "agent" | "parallel">,
+  api: Pick<WorkflowApi, "agent" | "modelProfile" | "parallel">,
   findings: T[],
   context: string,
   options: AdvisoryChallengeOptions,
@@ -56,12 +56,12 @@ export async function challengeFindings<T extends AdvisoryVerified>(
     replacements.set(finding.candidateId, { ...finding, verdict: "NOT_SUBSTANTIATED", challenge: { status: "failed" } });
     const challenge = await api.agent(
       `Assume this finding is a false positive. Try to DISPROVE it. Find the strongest concrete counterexample or alternative root cause. Inspect callers, invariants, tests and control flow. For a repair, seek an input, race or error path that still fails. State the smallest experiment distinguishing explanations. Do not edit files or claim tests you did not run. No counterexample found is not proof.\n\nExact review context:\n${context}\n\nCandidate and verifier evidence:\n${JSON.stringify(finding)}`,
-      { label: `challenge:${finding.candidateId}`, phase: "Challenge", profile: "medium", tools: DEFAULT_ADVISORY_TOOLS, toolHints: DEFAULT_ADVISORY_TOOL_HINTS, schema: ChallengeSchema },
+      { label: `challenge:${finding.candidateId}`, phase: "Challenge", ...api.modelProfile("medium"), tools: DEFAULT_ADVISORY_TOOLS, toolHints: DEFAULT_ADVISORY_TOOL_HINTS, schema: ChallengeSchema },
     );
     replacements.set(finding.candidateId, { ...finding, verdict: "NOT_SUBSTANTIATED", challenge: { status: "failed", challenge } });
     const adjudication = await api.agent(
       `Adjudicate the original finding, independent verifier evidence and falsification attempt below. Preserve unresolved conflict; do not force consensus. A missing counterexample alone cannot upgrade a plausible claim. Cite concrete evidence and observed test results; never invent experiments.\nContext:\n${context}\nOriginal and verifier:\n${JSON.stringify(finding)}\nChallenger:\n${JSON.stringify(challenge)}`,
-      { label: `adjudicate:${finding.candidateId}`, phase: "Challenge", profile: "medium", tools: [], schema: AdjudicationSchema },
+      { label: `adjudicate:${finding.candidateId}`, phase: "Challenge", ...api.modelProfile("medium"), tools: [], schema: AdjudicationSchema },
     );
     replacements.set(finding.candidateId, {
       ...finding,

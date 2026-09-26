@@ -63,7 +63,7 @@ export default async function run(api: WorkflowApi): Promise<unknown> {
       "Inspect repository structure, the target path or module, and relevant AGENTS.md / project docs conventions. " +
       "Return the concrete files that should be considered, a short summary, and any conventions that affect refactor advice. " +
       `This workflow will fan out across ${REFACTOR_LENSES.length} lenses with up to ${PER_LENS} candidates per lens. Structured output only.`,
-    { phase: "Scope", label: "scope", tools: DEFAULT_ADVISORY_TOOLS, toolHints: DEFAULT_ADVISORY_TOOL_HINTS, profile: "medium", schema: ScopeSchema },
+    { phase: "Scope", label: "scope", tools: DEFAULT_ADVISORY_TOOLS, toolHints: DEFAULT_ADVISORY_TOOL_HINTS, ...api.modelProfile("medium"), schema: ScopeSchema },
   );
 
   if (!scope || scope.files.length === 0) {

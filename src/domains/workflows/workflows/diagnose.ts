@@ -65,7 +65,7 @@ export default async function run(api: WorkflowApi): Promise<unknown> {
       "Inspect relevant files, package/test configuration, and safe diagnostic commands. " +
       "Safe commands are read-only commands such as status, grep, listing files, typecheck/test commands, or commands explicitly requested by the user. " +
       "Do not run mutation, install, commit, network, or destructive commands. Return scoped files, observations, and constraints. Structured output only.",
-    { phase: "Scope", label: "scope", tools: DEFAULT_ADVISORY_TOOLS, toolHints: DEFAULT_ADVISORY_TOOL_HINTS, profile: "medium", schema: ScopeSchema },
+    { phase: "Scope", label: "scope", tools: DEFAULT_ADVISORY_TOOLS, toolHints: DEFAULT_ADVISORY_TOOL_HINTS, ...api.modelProfile("medium"), schema: ScopeSchema },
   );
 
   if (!scope) {

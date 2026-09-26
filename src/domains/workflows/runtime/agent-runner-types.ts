@@ -13,6 +13,7 @@ import type { WorkflowJournal } from "./journal.ts";
 import type { PerfSink } from "./perf.ts";
 import type { AgentOptions, WorkflowProgressEvent } from "./types.ts";
 import type { AgentChatRole } from "./progress-types.ts";
+import type { AgentTranscript } from "./live-agent.ts";
 import type { WorkflowUsageSink } from "./usage.ts";
 import type { WorktreeBaseline, WorktreeRegistry } from "./worktree.ts";
 
@@ -34,16 +35,19 @@ export type AgentRunnerSession = Pick<
   | "getLastAssistantText"
   | "isStreaming"
   | "followUp"
->;
+> & Partial<Pick<AgentSession, "setModel" | "setThinkingLevel" | "steer" | "getSteeringMessages" | "getFollowUpMessages">>;
 
 export type CreateAgentSession = (options: CreateAgentSessionOptions) => Promise<{ session: AgentRunnerSession }>;
 
 export interface AgentProgress {
-  agentQueued(phase: string | undefined, label: string, model?: string): number;
+  agentQueued(phase: string | undefined, label: string, model?: string, modelName?: string, thinkingLevel?: string): number;
+  bindAgentStop?(id: number, stop: () => void): () => void;
   agentStart(phase: string | undefined, label: string, id?: number, model?: string): void;
   agentTool(label: string, tool: string, id?: number): void;
   agentMessage(id: number, role: AgentChatRole, text: string): void;
-  bindAgentFollowUp(id: number, send: (message: string) => Promise<void>): () => void;
+  bindAgentFollowUp(id: number, send: (message: string, steer?: boolean) => Promise<void>): () => void;
+  bindAgentTranscript?(id: number, read: () => AgentTranscript): () => void;
+  agentChanged?(id: number, model?: string, modelName?: string, thinkingLevel?: string): void;
   agentDone(label: string, id?: number): void;
   agentFailed(label: string, error: unknown, id?: number): void;
   event(event: WorkflowProgressEvent): void;

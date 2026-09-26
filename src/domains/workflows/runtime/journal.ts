@@ -81,12 +81,12 @@ export function workflowJournalPath(cwd: string, runId: string): string {
   return join(workflowRunsDir(cwd), `${validateWorkflowRunId(runId)}.jsonl`);
 }
 
-export function agentJournalKey(prompt: string, opts: AgentOptions = {}, worktreeBaseline?: WorktreeBaseline): string {
+export function agentJournalKey(prompt: string, opts: Partial<AgentOptions> = {}, worktreeBaseline?: WorktreeBaseline): string {
   const capture = captureAgentJournalKey(prompt, opts, worktreeBaseline);
   return capture.kind === "verified" ? capture.key : `agent:unverifiable:${randomUUID()}`;
 }
 
-export function hashAgentCall(prompt: string, opts: AgentOptions = {}, worktreeBaseline?: WorktreeBaseline): string {
+export function hashAgentCall(prompt: string, opts: Partial<AgentOptions> = {}, worktreeBaseline?: WorktreeBaseline): string {
   const capture = captureAgentCallHash(prompt, opts, worktreeBaseline);
   return capture.kind === "verified"
     ? capture.hash
@@ -96,7 +96,7 @@ export function hashAgentCall(prompt: string, opts: AgentOptions = {}, worktreeB
 /** Capture a replay key without allowing hostile or oversized schemas to escape as exceptions. */
 export function captureAgentJournalKey(
   prompt: string,
-  opts: AgentOptions = {},
+  opts: Partial<AgentOptions> = {},
   worktreeBaseline?: WorktreeBaseline,
 ): AgentJournalKeyCapture {
   const behavior = captureAgentCallHash(prompt, opts, worktreeBaseline);
@@ -118,7 +118,7 @@ type AgentCallHashCapture =
 
 function captureAgentCallHash(
   prompt: string,
-  opts: AgentOptions,
+  opts: Partial<AgentOptions>,
   worktreeBaseline: WorktreeBaseline | undefined,
 ): AgentCallHashCapture {
   try {

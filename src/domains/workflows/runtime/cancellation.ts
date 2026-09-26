@@ -1,3 +1,8 @@
+/** Agent-local cancellation is recoverable and must not stop sibling tasks. */
+export class WorkflowAgentStoppedError extends Error {
+  override readonly name = "WorkflowAgentStoppedError";
+}
+
 export class WorkflowAbortError extends Error {
   constructor(message = "Workflow aborted") {
     super(message);

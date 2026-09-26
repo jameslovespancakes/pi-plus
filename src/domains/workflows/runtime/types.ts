@@ -1,5 +1,6 @@
 import type { Static, TSchema } from "typebox";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { AgentTranscript } from "./live-agent.ts";
 import type { WorkflowBudget } from "./budget.ts";
 import type { Pipeline, WorkflowParallel } from "./concurrency.ts";
 import type { PerfSink, PerfSnapshot } from "./perf.ts";
@@ -35,14 +36,13 @@ export interface WorkflowRunMetadata {
   readonly recordPath: string;
 }
 
-export interface WorkflowBackgroundOrigin {
+export interface WorkflowOrigin {
   /** Stable pi session id used to route and deduplicate completion delivery. */
   readonly sessionId: string;
   readonly requestedAt: number;
 }
 
 export interface WorkflowRunOptions {
-  inspect?: boolean;
   perf?: boolean;
   concurrency?: number;
   parallelSubmissionLimit?: number;
@@ -64,8 +64,8 @@ export interface WorkflowRunOptions {
   budget?: number;
   /** Internal/test override for the generated run id. Omit to generate a new id. */
   runId?: string;
-  /** Internal origin metadata for an explicitly backgrounded tool invocation. */
-  background?: WorkflowBackgroundOrigin;
+  /** Owning session for durable completion delivery. */
+  origin?: WorkflowOrigin;
   /** Replay completed agent results from this prior run id when call and execution context still match. */
   resumeFromRunId?: string;
   /** Explicitly allow resume to ignore only a workflow-source fingerprint mismatch. */
@@ -92,7 +92,9 @@ export interface WorkflowRunOptions {
 export interface WorkflowProgressSource {
   snapshot(): WorkflowProgressSnapshot;
   conversation(agentId: number): readonly AgentChatMessage[];
-  followUp(agentId: number, message: string): Promise<void>;
+  stopAgent?(agentId: number): void;
+  transcript?(agentId: number): AgentTranscript | undefined;
+  followUp(agentId: number, message: string, steer?: boolean): Promise<void>;
   subscribe(listener: () => void): () => void;
 }
 
@@ -122,19 +124,16 @@ export type WorkflowProgressEvent =
 
 export interface AgentOptions<S extends TSchema = TSchema> {
   /** Label shown in the progress tree (e.g. "find:logic-bugs"). */
-  label?: string;
+  label: string;
   /** Phase to group this agent under in the progress tree. */
   phase?: string;
   /**
-   * Optional model id. Overrides profile routing; when both model and profile are
-   * omitted, inherit the host model. Explicit refs are strict: bare ids resolve as
-   * Anthropic shorthand; use "provider/id" for other providers.
+   * Required model id. Bare ids resolve as Anthropic shorthand;
+   * use "provider/id" for other providers. No implicit host fallback.
    */
-  model?: string;
-  /** Reasoning effort for this agent. Overrides the profile's configured effort. */
-  thinkingLevel?: ThinkingLevel;
-  /** Exact configured model route to use when model/thinkingLevel do not override it. */
-  profile?: WorkflowModelProfileName;
+  model: string;
+  /** Required reasoning effort for this agent. */
+  thinkingLevel: ThinkingLevel;
   /**
    * Stable identity hint for resume replay. Use this for repeated logical calls
    * with identical prompts/options, e.g. `${stage}:${item.id}`.
@@ -187,6 +186,8 @@ export interface AgentOptions<S extends TSchema = TSchema> {
  * exports `meta` plus a default `async (api: WorkflowApi) => result`.
  */
 export interface WorkflowApi {
+  /** Resolve an explicitly configured route; throws instead of inheriting the host. */
+  modelProfile(name: WorkflowModelProfileName): Pick<AgentOptions, "model" | "thinkingLevel">;
   /** Run a schema subagent in an isolated worktree and return its structured result plus patch. */
   agent<S extends TSchema>(
     prompt: string,
@@ -197,7 +198,7 @@ export interface WorkflowApi {
   /** Run a subagent and return validated structured output; rejects with a recoverable typed error on repair exhaustion. */
   agent<S extends TSchema>(prompt: string, opts: AgentOptions<S> & { schema: S }): Promise<Static<S>>;
   /** Run a subagent and return its final assistant text. */
-  agent(prompt: string, opts?: AgentOptions): Promise<string>;
+  agent(prompt: string, opts: AgentOptions): Promise<string>;
   /**
    * Run another registered workflow inline as a sub-step and return its result. The child shares
    * this run's concurrency cap, abort signal, and perf sink. Nests one level only: calling

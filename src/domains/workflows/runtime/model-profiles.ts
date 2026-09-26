@@ -6,6 +6,7 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { getAgentDir, type ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { isMissingPathError } from "./filesystem-error.ts";
 import { unknownErrorMessage } from "./unknown-error.ts";
+import { isWorkflowThinkingLevel } from "./agent-options.ts";
 
 export const WORKFLOW_MODEL_PROFILE_NAMES = ["small", "medium", "big"] as const;
 export type WorkflowModelProfileName = (typeof WORKFLOW_MODEL_PROFILE_NAMES)[number];
@@ -56,8 +57,7 @@ export class WorkflowModelProfileConfigError extends Error {
   }
 }
 
-export const WORKFLOW_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const satisfies readonly ThinkingLevel[];
-const THINKING_LEVELS = new Set<ThinkingLevel>(WORKFLOW_THINKING_LEVELS);
+export { WORKFLOW_THINKING_LEVELS, isWorkflowThinkingLevel } from "./agent-options.ts";
 const HOST_FALLBACK_THINKING: Record<WorkflowModelProfileName, ThinkingLevel> = {
   small: "low",
   medium: "medium",
@@ -182,10 +182,6 @@ export function clearWorkflowModelProfile(configPath: string, name: WorkflowMode
 
 export function isWorkflowModelProfileName(value: string): value is WorkflowModelProfileName {
   return WORKFLOW_MODEL_PROFILE_NAMES.includes(value as WorkflowModelProfileName);
-}
-
-export function isWorkflowThinkingLevel(value: string): value is ThinkingLevel {
-  return THINKING_LEVELS.has(value as ThinkingLevel);
 }
 
 function parseWorkflowModelProfileFile(value: unknown, configPath: string): WorkflowModelProfileFile {

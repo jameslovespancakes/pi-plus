@@ -32,7 +32,7 @@ export interface ReviewFixWorkflowResult {
   readonly fixes: readonly ReviewFixOutcome[];
 }
 
-export type ReviewFixWorkflowApi = Pick<WorkflowApi, "agent" | "parallel" | "phase" | "cwd" | "signal">;
+export type ReviewFixWorkflowApi = Pick<WorkflowApi, "agent" | "modelProfile" | "parallel" | "phase" | "cwd" | "signal">;
 
 /** Build an ephemeral workflow that generates one isolated patch preview per finding. */
 export function createReviewFixWorkflow(
@@ -89,7 +89,7 @@ export async function runReviewFixWorkflow(
         isolation: "worktree",
         label: `fix:${issue.id}`,
         phase: REVIEW_FIX_PHASE,
-        profile: "medium",
+        ...api.modelProfile("medium"),
         cacheKey: `review-fix:${issue.id}`,
         tools: [...REVIEW_FIX_TOOLS],
         toolHints: ["search"],
@@ -138,7 +138,7 @@ async function evaluateReviewFix(api: ReviewFixWorkflowApi, input: {
     const evaluated = await api.agent(
       `Independently evaluate a candidate repair. Your fresh worktree contains the exact reviewed baseline plus the captured patch. The implementer's report is not validation evidence. Inspect the finding, callers and tests. Reject incorrect repairs; return blocked if required validation is unavailable. Select at most six focused deterministic checks with executable and argument arrays. Require at least one meaningful behavior check. If a regression test is applicable, supply a test-only baselinePatch and specific expectedFailure so the engine can prove it fails before the repair and passes after. Do not edit, install dependencies, commit or change branches. The engine will execute checks independently.\nFinding: ${JSON.stringify(serializeReviewIssue(issue))}\nBaseline: ${isolated.baselineOid}\nPatch SHA-256: ${validation.patchHash}\nPatch:\n${isolated.patch}`,
       { isolation: "worktree", candidatePatch: { baselineOid: isolated.baselineOid, patch: isolated.patch },
-        label: `evaluate:${issue.id}`, phase: "Validate patch previews", profile: "medium", resume: "off",
+        label: `evaluate:${issue.id}`, phase: "Validate patch previews", ...api.modelProfile("medium"), resume: "off",
         tools: ["read", "bash", "grep", "find", "ls"], toolHints: ["search"], schema: PatchEvaluationSchema },
     );
     if (evaluated.baselineOid !== isolated.baselineOid || evaluated.patch !== isolated.patch) {

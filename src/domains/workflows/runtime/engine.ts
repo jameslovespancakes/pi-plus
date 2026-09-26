@@ -3,6 +3,7 @@ import type { Static, TSchema } from "typebox";
 import { bindParallel, bindPipeline, Semaphore } from "./concurrency.ts";
 import { WorkflowAgentLimiter } from "./agent-limits.ts";
 import { defaultAgentRetryScheduler, type AgentRetryScheduler } from "./agent-retry.ts";
+import { assertAgentOptions } from "./agent-options.ts";
 import { resolveWorkflowModelProfiles, type ResolvedWorkflowModelProfiles } from "./model-profiles.ts";
 import { abortReason, isWorkflowPauseError, linkAbortSignal, throwIfAborted } from "./cancellation.ts";
 import { createBudget } from "./budget.ts";
@@ -15,8 +16,6 @@ import {
   type ResolvedWorkflowRunOptions,
 } from "./options.ts";
 import type { AgentOptions, IsolatedAgentResult, LoadedWorkflow, WorkflowApi, WorkflowProgressEvent, WorkflowRef, WorkflowRunOptions } from "./types.ts";
-import { WorkflowInspector } from "./ui/workflow-inspector.ts";
-import { WORKFLOW_VIEWER_OVERLAY_OPTIONS } from "./ui/workflow-viewer-layout.ts";
 import { createWorkflowJournal, createWorkflowRunId, pruneWorkflowJournals, workflowJournalPath } from "./journal.ts";
 import { WorktreeRegistry } from "./worktree.ts";
 import { runFinalizers } from "./finalizers.ts";
@@ -101,7 +100,9 @@ export async function runResolvedWorkflow(
   const progressSource = {
     snapshot: () => progress.snapshot(),
     conversation: (agentId: number) => progress.conversation(agentId),
-    followUp: (agentId: number, message: string) => progress.followUp(agentId, message),
+    stopAgent: (agentId: number) => progress.stopAgent(agentId),
+    transcript: (agentId: number) => progress.transcript(agentId),
+    followUp: (agentId: number, message: string, steer?: boolean) => progress.followUp(agentId, message, steer),
     subscribe: (listener: () => void) => progress.subscribe(listener),
   };
   const perf = resolvedOptions.perfRecorder ?? createPerfRecorder(resolvedOptions.perf);
@@ -133,33 +134,6 @@ export async function runResolvedWorkflow(
   const unlinkOptionAbortSignal = linkAbortSignal(resolvedOptions.signal, runAbortController);
   const workflowOutcome = await captureOutcome(async () => {
     await notifyLifecycleObserver(progress, "progress source callback", () => resolvedOptions.onProgressSource?.(progressSource));
-    if (resolvedOptions.inspect && ctx.hasUI && ctx.mode === "tui") {
-      let unsubscribe: (() => void) | undefined;
-      void ctx.ui
-        .custom<void>(
-          (tui, theme, _keybindings, done) => {
-            unsubscribe = progressSource.subscribe(() => tui.requestRender());
-            return new WorkflowInspector(
-              () => progress.snapshot(),
-              tui,
-              theme,
-              () => done(undefined),
-              undefined,
-              progressSource,
-            );
-          },
-          WORKFLOW_VIEWER_OVERLAY_OPTIONS,
-        )
-        .catch((error: unknown) => {
-          try {
-            progress.log(`inspector failed: ${unknownErrorMessage(error)}`);
-          } catch {
-            // Inspector reporting is detached and must never become another rejection.
-          }
-        })
-        .finally(() => unsubscribe?.());
-    }
-
     const journal = await createWorkflowJournal({ resumePath, writePath: journalPath });
     durableRun.transition({ state: "running", progress: progress.snapshot() });
     await durableRun.flush().catch(() => undefined);
@@ -185,7 +159,7 @@ export async function runResolvedWorkflow(
       agentLimiter: new WorkflowAgentLimiter(resolvedOptions.maxAgents),
       agentTimeoutMs: resolvedOptions.agentTimeoutMs,
       agentRetries: resolvedOptions.agentRetries,
-      pauseOnProviderUsageLimit: resolvedOptions.background !== undefined,
+      pauseOnProviderUsageLimit: resolvedOptions.origin !== undefined,
       resumeEditedWorkflow: resolvedOptions.resumeEditedWorkflow,
       retryScheduler: dependencies.retryScheduler ?? defaultAgentRetryScheduler,
       modelProfiles,
@@ -214,11 +188,8 @@ export async function runResolvedWorkflow(
     ? undefined
     : backgroundPauseError(workflowOutcome.error, ctx.signal, resolvedOptions.signal);
   const willPauseWorkflow = workflowPause !== undefined
-    && (!(workflowPause instanceof WorkflowProviderUsageLimitError) || resolvedOptions.background !== undefined);
-  const preserveFailedWorktrees = !workflowOutcome.ok
-    && !willPauseWorkflow
-    && !ctx.signal?.aborted
-    && !resolvedOptions.signal?.aborted;
+    && (!(workflowPause instanceof WorkflowProviderUsageLimitError) || resolvedOptions.origin !== undefined);
+  const preserveFailedWorktrees = !workflowOutcome.ok && !willPauseWorkflow;
   if (preserveFailedWorktrees) worktrees.preserveRecoverable();
   const finalizationOutcome = await captureOutcome(() =>
     finalizeWorkflowRun({
@@ -229,7 +200,7 @@ export async function runResolvedWorkflow(
       progress,
       runStore,
       worktrees,
-      preserveWorktrees: preserveFailedWorktrees,
+      preserveWorktrees: preserveFailedWorktrees || worktrees.preservedPaths.length > 0,
       unlinkSignals: [unlinkContextAbortSignal, unlinkOptionAbortSignal],
     }),
   );
@@ -259,7 +230,7 @@ export async function runResolvedWorkflow(
     const pauseError = backgroundPauseError(pauseCandidate, ctx.signal, resolvedOptions.signal);
     if (pauseError) {
       if (pauseError instanceof WorkflowProviderUsageLimitError) {
-        if (resolvedOptions.background === undefined) {
+        if (resolvedOptions.origin === undefined) {
           durableRun.transition({
             state: "failed",
             progress: progress.snapshot(),
@@ -428,6 +399,7 @@ function createWorkflowAgent(
   function agent<S extends TSchema>(prompt: string, opts: AgentOptions<S> & { schema: S }): Promise<Static<S>>;
   function agent(prompt: string, opts?: AgentOptions): Promise<string>;
   function agent(prompt: string, agentOpts?: AgentOptions): Promise<unknown> {
+    assertAgentOptions(agentOpts);
     const scopedOptions = scope.agentOptions(agentOpts);
     const executionOptions: AgentExecutionOptions =
       scopedOptions.isolation === "worktree" && mod.isolatedWorktreeBaseline !== undefined
@@ -486,6 +458,13 @@ export async function runWorkflowWithContext(
         };
 
   const api: WorkflowApi = {
+    modelProfile(name) {
+      const profile = rc.modelProfiles[name];
+      if (!profile || profile.source === "host" || !profile.model || !profile.thinkingLevel) {
+        throw new Error(`Configure workflow profile ${name} with an explicit model and thinkingLevel in workflow-models.json.`);
+      }
+      return { model: `${profile.model.provider}/${profile.model.id}`, thinkingLevel: profile.thinkingLevel };
+    },
     agent,
     workflow,
     parallel: bindParallel({
@@ -510,7 +489,7 @@ export async function runWorkflowWithContext(
 }
 
 interface WorkflowScope {
-  agentOptions(opts: AgentOptions | undefined): AgentOptions;
+  agentOptions(opts: AgentOptions): AgentOptions;
   phase(title: string): void;
   log(message: string): void;
   event(event: WorkflowProgressEvent): void;
@@ -523,7 +502,7 @@ function createWorkflowScope(progress: WorkflowProgress, prefix: string, namespa
   return {
     agentOptions(opts) {
       const phase = opts?.phase ? display(opts.phase) : currentPhase;
-      return opts ? { ...opts, phase } : { phase };
+      return { ...opts, phase };
     },
     phase(title) {
       currentPhase = display(title);

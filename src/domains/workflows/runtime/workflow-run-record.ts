@@ -14,7 +14,7 @@ import {
   createPersistedWorkflowBackground,
   isPersistedWorkflowBackground,
   type PersistedWorkflowBackground,
-} from "./workflow-run-background.ts";
+} from "./workflow-run-delivery.ts";
 
 export const WORKFLOW_RUN_RECORD_VERSION = 1;
 
@@ -137,7 +137,8 @@ export function createWorkflowRunRecord(input: {
     createdAt: input.progress.startedAt,
     updatedAt: input.progress.startedAt,
     progress: compactWorkflowProgress(input.progress),
-    background: createPersistedWorkflowBackground(input.options.background),
+    // Keep the v1 serialized field name so existing records remain readable.
+    background: createPersistedWorkflowBackground(input.options.origin),
   };
 }
 
@@ -242,7 +243,7 @@ function persistedWorkflowRunOptions(
   argumentsPresent: boolean,
 ): PersistedWorkflowRunOptions {
   return {
-    inspect: options.inspect ?? false,
+    inspect: false, // Legacy record field; inspection is now independent of execution.
     perf: options.perf,
     concurrency: options.concurrency,
     parallelSubmissionLimit: options.parallelSubmissionLimit,
@@ -274,6 +275,8 @@ function compactWorkflowProgress(snapshot: WorkflowProgressSnapshot): WorkflowPr
         id: agent.id,
         label: boundedText(agent.label),
         model: agent.model === undefined ? undefined : boundedText(agent.model),
+        modelName: agent.modelName === undefined ? undefined : boundedText(agent.modelName),
+        thinkingLevel: agent.thinkingLevel === undefined ? undefined : boundedText(agent.thinkingLevel),
         status: agent.status,
         startedAt: agent.startedAt,
         doneAt: agent.doneAt,
@@ -563,7 +566,7 @@ function isPhaseSnapshot(value: unknown): boolean {
 
 function isAgentSnapshot(value: unknown): boolean {
   if (!isRecord(value) || !isFiniteNumber(value.id) || typeof value.label !== "string") return false;
-  if (value.status !== "queued" && value.status !== "running" && value.status !== "done" && value.status !== "failed") return false;
+  if (value.status !== "queued" && value.status !== "running" && value.status !== "stopping" && value.status !== "stopped" && value.status !== "done" && value.status !== "failed") return false;
   if (!isFiniteNumber(value.toolUses)) return false;
   if (value.startedAt !== undefined && !isFiniteNumber(value.startedAt)) return false;
   if (value.doneAt !== undefined && !isFiniteNumber(value.doneAt)) return false;

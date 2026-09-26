@@ -4,7 +4,7 @@ import type { AgentRowSnapshot, WorkflowLaneItemStatus, WorkflowProgressSnapshot
 import { toDisplayLine } from "./display-text.ts";
 import { formatWorkflowUsageLine } from "../usage.ts";
 
-export type WorkflowDisplayStatus = WorkflowLaneItemStatus | "queued" | "done" | "failed";
+export type WorkflowDisplayStatus = WorkflowLaneItemStatus | "queued" | "done" | "failed" | "stopping" | "stopped";
 export type WorkflowThemeColor = Parameters<Theme["fg"]>[0];
 
 export function formatDuration(ms: number): string {
@@ -42,6 +42,10 @@ export function statusIcon(status: WorkflowDisplayStatus, theme: Theme): string 
     case "error":
     case "failed":
       return theme.fg("error", "✗");
+    case "stopped":
+      return theme.fg("dim", "■");
+    case "stopping":
+      return theme.fg("warning", "◌");
     case "running":
       return theme.fg("accent", "●");
     case "queued":
@@ -151,7 +155,7 @@ function countSnapshotAgents(snapshot: WorkflowProgressSnapshot): WorkflowStatus
   const counts = { queued: 0, running: 0, done: 0, failed: 0, total: 0 };
   for (const phase of snapshot.phases) {
     for (const agent of phase.agents) {
-      counts[agent.status]++;
+      counts[agent.status === "stopped" ? "failed" : agent.status === "stopping" ? "running" : agent.status]++;
       counts.total++;
     }
   }

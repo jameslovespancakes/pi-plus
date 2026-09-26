@@ -1,4 +1,4 @@
-import type { WorkflowBackgroundOrigin } from "./types.ts";
+import type { WorkflowOrigin } from "./types.ts";
 import type { WorkflowRunRecord } from "./workflow-run-record.ts";
 
 const MAX_BACKGROUND_TEXT = 2_048;
@@ -9,12 +9,12 @@ export type WorkflowRunDelivery =
   | { readonly state: "unavailable"; readonly attemptedAt: number; readonly message: string };
 
 export interface PersistedWorkflowBackground {
-  readonly origin: WorkflowBackgroundOrigin;
+  readonly origin: WorkflowOrigin;
   readonly delivery: WorkflowRunDelivery;
 }
 
 export function createPersistedWorkflowBackground(
-  origin: WorkflowBackgroundOrigin | undefined,
+  origin: WorkflowOrigin | undefined,
 ): PersistedWorkflowBackground | undefined {
   if (!origin) return undefined;
   return {

@@ -8,6 +8,23 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+### Changed
+
+- Consolidated workflow launch, cancellation, recovery and delivery into one
+  lifecycle. All command/tool launches return immediately; removed the public
+  background switch, foreground launch helpers and duplicate background widget.
+- Agent calls require explicit label, model and thinking level. Built-in routes
+  require configured models/effort rather than silently inheriting the host.
+- Compact agent rows show friendly model names and capitalized thinking levels.
+  Esc navigates back; X stops an agent from the list. Inspection is disabled
+  below 80×24 and uses native pi transcript components and editor controls.
+
+### Added
+
+- Workflow tool list/inspect/stop actions, including agent-scoped cancellation.
+- Live child-session rendering, steering/follow-up queues, and agent-local
+  `/model` and `/thinking` commands. Stopped worktree edits are retained.
+
 ## [1.0.20] - 2026-09-24
 
 ### Added

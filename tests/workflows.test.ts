@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { Semaphore, parallel } from "../src/domains/workflows/runtime/concurrency.ts";
@@ -88,7 +88,7 @@ test("workflow progress and usage stay available without a footer status line", 
   } finally {
     tracker.done();
   }
-  assert.deepEqual(statuses, [undefined]);
+  assert.deepEqual(statuses, []);
 });
 
 test("workflow widget is a compact agent board", () => {
@@ -113,7 +113,8 @@ test("workflow widget is a compact agent board", () => {
   }, plainTheme);
   assert.match(lines.join("\n"), /Audit routing/);
   assert.match(lines.join("\n"), /codex\/gpt-test/);
-  assert.match(lines.join("\n"), /\/workflow/);
+  assert.match(lines.join("\n"), /0\/1 done/);
+  assert.doesNotMatch(lines.join("\n"), /2 tools|Background|Σ/);
   assert.doesNotMatch(lines.join("\n"), /\/workflow info/);
 });
 
@@ -161,7 +162,7 @@ test("workflow board opens agent chat and sends a follow-up", async () => {
   const chat = board.render(80);
   assert.match(chat.join("\n"), /Review OAuth routing/);
   assert.match(chat.join("\n"), /Token refresh is safe/);
-  assert.match(chat.join("\n"), /follow-up to this agent/);
+  assert.match(chat.join("\n"), /enter steer/);
   assert.doesNotMatch(chat.join("\n"), /following latest activity/);
   assert.ok(backgrounds.includes("userMessageBg"));
   assert.ok(backgrounds.includes("toolPendingBg"));
@@ -186,4 +187,10 @@ test("built-in workflows and one command surface are bundled directly", () => {
   assert.equal(entry.match(/registerCommand\("workflow"/g)?.length, 1);
   assert.doesNotMatch(`${entry}\n${dynamax}`, /registerCommand\("workflow:/);
   assert.doesNotMatch(entry, /\/workflow info|name === "info"/);
+  const runtime = join(process.cwd(), "src/domains/workflows/runtime");
+  assert.equal(existsSync(join(runtime, "background-workflows.ts")), false);
+  assert.equal(existsSync(join(runtime, "background-workflow-tool.ts")), false);
+  const lifecycle = readFileSync(join(runtime, "workflow-lifecycle.ts"), "utf8");
+  assert.doesNotMatch(lifecycle, /setWidget|setStatus|BACKGROUND_WIDGET/);
+  assert.doesNotMatch(readFileSync(join(runtime, "engine.ts"), "utf8"), /WorkflowInspector|ui\.custom/);
 });

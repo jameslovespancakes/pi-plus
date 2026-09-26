@@ -50,7 +50,7 @@ export function publishVerifiedKeptProgress(
 }
 
 export interface LensVerificationPipelineOptions {
-  api: Pick<WorkflowApi, "agent" | "parallel" | "phase" | "progress" | "log">;
+  api: Pick<WorkflowApi, "agent" | "modelProfile" | "parallel" | "phase" | "progress" | "log">;
   lenses: readonly AdvisoryLens[];
   perLens: number;
   finderPhase?: "Find" | "Hypothesize";
@@ -77,7 +77,7 @@ export async function runLensVerificationPipeline(
     const result = await api.agent(finderPrompt(lens), {
       phase: finderPhase, label: `${finderPhase.toLowerCase()}:${lens.label}`,
       tools: DEFAULT_ADVISORY_TOOLS, toolHints: DEFAULT_ADVISORY_TOOL_HINTS,
-      profile: "small", schema: AdvisoryCandidatesSchema,
+      ...api.modelProfile("small"), schema: AdvisoryCandidatesSchema,
     });
     const raw = identifyCandidates(result.candidates.slice(0, perLens), lens.label);
     rawCandidates += raw.length;
@@ -105,7 +105,7 @@ export async function runLensVerificationPipeline(
       const judged = await api.agent(`${verifierPrompt(candidate)}\nCandidate record: ${JSON.stringify(candidate)}`, {
         phase: "Verify", label: `verify:${location.file.split("/").pop() ?? location.file}`,
         tools: DEFAULT_ADVISORY_TOOLS, toolHints: DEFAULT_ADVISORY_TOOL_HINTS,
-        profile: "small", schema: AdvisoryVerdictSchema,
+        ...api.modelProfile("small"), schema: AdvisoryVerdictSchema,
       });
       recordVerdictProgress(api.progress, candidate, judged, () => { refuted += 1; });
       return { ...candidate, verdict: judged.verdict, evidence: judged.evidence, confidence: judged.confidence };
@@ -115,7 +115,7 @@ export async function runLensVerificationPipeline(
 }
 
 export async function synthesizeAdvisoryReport(
-  api: Pick<WorkflowApi, "agent" | "parallel" | "phase">,
+  api: Pick<WorkflowApi, "agent" | "modelProfile" | "parallel" | "phase">,
   prompt: string,
   ranked: readonly AdvisoryVerified[],
   coverage: AdvisoryStageCoverage[],
@@ -123,7 +123,7 @@ export async function synthesizeAdvisoryReport(
   api.phase("Synthesize");
   const [report] = await collectAdvisoryStage(api, "Synthesize", [{ id: "synthesize", run: () => api.agent(
     SYNTHESIS_ID_INSTRUCTIONS + prompt,
-    { phase: "Synthesize", label: "synthesize", tools: [], profile: "medium", resume: "read-only", schema: AdvisorySynthesisSchema },
+    { phase: "Synthesize", label: "synthesize", tools: [], ...api.modelProfile("medium"), resume: "read-only", schema: AdvisorySynthesisSchema },
   ) }], coverage);
   return resolveAdvisorySynthesis(report, ranked, {
     impact: "Impact not restated by verification.",
