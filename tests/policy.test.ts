@@ -11,7 +11,7 @@ async function loadPolicyModule(policy: unknown) {
   process.env.PI_AGENT_DIR = dir;
   const config = await import("../src/core/config.ts");
   config.resetConfigCache();
-  const exports = await import("../src/core/policy/policy.ts");
+  const exports = await import("../src/providers/policy.ts");
   const module: any = Object.assign(new exports.ProviderPolicy(), { loadPolicy: exports.loadPolicy, gatedProviders: exports.gatedProviders });
   return { module, dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
@@ -139,7 +139,7 @@ test("a missing config is created from defaults", async () => {
   try {
     const config = await import("../src/core/config.ts");
     config.resetConfigCache();
-    const module = await import(`../src/core/policy/policy.ts?case=${Math.random()}`);
+    const module = await import(`../src/providers/policy.ts?case=${Math.random()}`);
     const loaded = module.loadPolicy();
     const written = JSON.parse(readFileSync(join(dir, "pi-plus.json"), "utf8"));
     assert.deepEqual(written.policy, loaded);
@@ -189,7 +189,7 @@ test("explicit OpenRouter Off overrides auto-approval and normal On clears only 
 test("provider grants and ZDR mode are isolated and reset between sessions", async () => {
   const { module, cleanup } = await loadPolicyModule(BASE);
   try {
-    const { ProviderPolicy } = await import("../src/core/policy/policy.ts");
+    const { ProviderPolicy } = await import("../src/providers/policy.ts");
     const other = new ProviderPolicy();
     module.approveOpenRouterZdr();
     assert.equal(other.providerState("openrouter"), "blocked");

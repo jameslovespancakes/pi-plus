@@ -1,9 +1,9 @@
 import { basename } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { ClaudeRemoteBridge, type BridgeOptions } from "../../core/claude-remote/bridge.ts";
-import { mirrorMessage } from "../../core/claude-remote/protocol.ts";
+import { ClaudeRemoteBridge, type BridgeOptions } from "../../providers/anthropic/remote-control/bridge.ts";
+import { mirrorMessage } from "../../providers/anthropic/remote-control/protocol.ts";
 import { env } from "../../core/env.ts";
-import { createTokenSource } from "./auth.ts";
+import { createTokenSource } from "../../providers/anthropic/remote-control/auth.ts";
 import { remoteControlPicker } from "./picker.ts";
 
 interface Bridge {

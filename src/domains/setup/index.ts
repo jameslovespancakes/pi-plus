@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { env } from "../../core/env.ts";
 import { agentPath, readJson } from "../../core/store.ts";
 import { configPath, readConfig } from "../../core/config.ts";
-import { accountProviders } from "../../core/accounts/registry.ts";
+import { accountProviders } from "../../providers/shared/accounts/registry.ts";
 import { readSshHosts } from "../../core/exec/ssh-config.ts";
 
 /**

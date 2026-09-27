@@ -8,9 +8,9 @@ import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
 import { createAgentSession, DefaultResourceLoader, generateSummaryWithUsage, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { resetConfigCache } from "../src/core/config.ts";
-import { withOpenRouterZdr } from "../src/core/policy/openrouter.ts";
-import { registerPolicyGate } from "../src/domains/models/policy-gate.ts";
-import { synchronizeWorkflowModelRuntime } from "../src/domains/workflows/runtime/agent-session-providers.ts";
+import { withOpenRouterZdr } from "../src/providers/openrouter/policy.ts";
+import { registerPolicyGate } from "../src/domains/models/provider-policy.ts";
+import { synchronizeWorkflowModelRuntime } from "../src/domains/workflows/agents/agent-session-providers.ts";
 
 const native = builtinProviders().find((provider) => provider.id === "openrouter")!;
 const chatModel = native.getModels().find((model) => model.api === "openai-completions" && !model.reasoning)!;

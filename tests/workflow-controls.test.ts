@@ -2,13 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import { assertAgentOptions } from "../src/domains/workflows/runtime/agent-options.ts";
-import { ProgressTracker } from "../src/domains/workflows/runtime/progress.ts";
-import { WorkflowInspector } from "../src/domains/workflows/runtime/ui/workflow-inspector.ts";
-import { AgentTranscriptView } from "../src/domains/workflows/runtime/ui/agent-transcript.ts";
-import { thinkingLabel } from "../src/domains/workflows/runtime/ui/workflow-widget.ts";
-import { Semaphore, parallel } from "../src/domains/workflows/runtime/concurrency.ts";
-import { WorkflowAgentStoppedError } from "../src/domains/workflows/runtime/cancellation.ts";
+import { assertAgentOptions } from "../src/domains/workflows/agents/agent-options.ts";
+import { ProgressTracker } from "../src/domains/workflows/runs/progress.ts";
+import { WorkflowInspector } from "../src/domains/workflows/ui/workflow-inspector.ts";
+import { AgentTranscriptView } from "../src/domains/workflows/ui/agent-transcript.ts";
+import { thinkingLabel } from "../src/domains/workflows/ui/workflow-widget.ts";
+import { Semaphore, parallel } from "../src/domains/workflows/execution/concurrency.ts";
+import { WorkflowAgentStoppedError } from "../src/domains/workflows/execution/cancellation.ts";
 
 const theme = {
   fg: (_color: string, text: string) => text, bg: (_color: string, text: string) => text,
@@ -83,6 +83,46 @@ test("Esc navigates back, X stops only from the list, and narrow terminals disab
     assert.equal(progress.snapshot().phases[0].agents[0].status, "running");
     board.handleInput("\u001b");
     assert.equal(closed, 1);
+  } finally { progress.done(); }
+});
+
+test("agent popup uses bounded scrolling and keeps the reading position while new output arrives", () => {
+  const progress = tracker();
+  const id = progress.agentQueued(undefined, "Only");
+  progress.agentStart(undefined, "Only", id);
+  progress.log("foundation: speculative output that must not preview on the board");
+  const logs = Array.from({ length: 60 }, (_, index) => ({ role: "assistant", text: `MARK-${String(index).padStart(2, "0")}`, createdAt: index }));
+  const board = new WorkflowInspector(() => progress.snapshot(), { terminal: { rows: 30 }, requestRender() {} } as any, theme,
+    () => {}, undefined, { conversation: () => logs as any, followUp: async () => {}, stopAgent() {} });
+  const rendered = () => board.render(100).join("\n");
+  const visibleLogs = () => board.render(100).filter((line) => line.includes("MARK-")).join("\n");
+  const wheel = (delta: number) => board.handleMouse({ type: "wheel", wheelDelta: delta } as any);
+  try {
+    assert.doesNotMatch(rendered(), /Latest|speculative output/);
+    board.handleInput("\r");
+    assert.match(rendered(), /MARK-59/);
+    board.handleInput("\u001b[5~"); // PageUp scrolls a viewport, not the editor.
+    assert.doesNotMatch(rendered(), /MARK-59/);
+    const reading = visibleLogs();
+    logs.push({ role: "assistant", text: "MARK-60", createdAt: 60 });
+    assert.equal(visibleLogs(), reading, "new output must not drag a scrolled reader down");
+    wheel(-100_000);
+    assert.match(rendered(), /MARK-00/);
+    wheel(-100_000);
+    wheel(6);
+    assert.doesNotMatch(rendered(), /MARK-00/, "overscrolling must not create an invisible offset debt");
+    board.handleInput("\u001b[1;5F"); // Ctrl+End resumes following live output.
+    assert.match(rendered(), /MARK-60/);
+    logs.push({ role: "assistant", text: "MARK-61", createdAt: 61 });
+    assert.match(rendered(), /MARK-61/);
+    board.handleInput("\u001b[1;5H");
+    assert.match(rendered(), /MARK-00/);
+    board.handleInput("draft");
+    const beforeArrow = visibleLogs();
+    board.handleInput("\u001b[B");
+    assert.equal(visibleLogs(), beforeArrow, "arrow keys still edit nonempty input");
+    board.handleInput("\u001b[6~");
+    assert.notEqual(visibleLogs(), beforeArrow, "PageDown scrolls even with a draft");
   } finally { progress.done(); }
 });
 

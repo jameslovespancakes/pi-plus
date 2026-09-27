@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { ProviderAuthInteraction } from "@earendil-works/pi-ai";
-import { GeminiVerificationRequiredError, fetchUserQuota } from "../src/core/gemini/client.ts";
-import { confirmGeminiAccess } from "../src/core/gemini/oauth.ts";
+import { GeminiVerificationRequiredError, fetchUserQuota } from "../src/providers/gemini/client.ts";
+import { confirmGeminiAccess } from "../src/providers/gemini/oauth.ts";
 
 const verificationUrl = "https://accounts.google.com/signin/continue?flowName=test&private=challenge";
 const credential = () => ({

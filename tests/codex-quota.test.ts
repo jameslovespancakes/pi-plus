@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyCodexQuotaHeaders, parseCodexQuotaHeaders } from "../src/core/codex/quota.ts";
-import { claimsOf, loadCodexAccounts, saveCodexAccounts } from "../src/core/codex/store.ts";
+import { applyCodexQuotaHeaders, parseCodexQuotaHeaders } from "../src/providers/codex/quota.ts";
+import { claimsOf, loadCodexAccounts, saveCodexAccounts } from "../src/providers/codex/store.ts";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";

@@ -5,18 +5,19 @@ import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelsPublication, RefreshModelsContext } from "@earendil-works/pi-ai";
-import type { AccountContext } from "../src/core/accounts/registry.ts";
-import { loadOAuthPool, resetOAuthPoolCache, saveOAuthAccount } from "../src/core/accounts/oauth-pool.ts";
-import { encodeApiKey } from "../src/core/gemini/credentials.ts";
-import { STATIC_MODELS } from "../src/core/gemini/models.ts";
-import { confirmGeminiAccess } from "../src/core/gemini/oauth.ts";
+import type { AccountContext } from "../src/providers/shared/accounts/registry.ts";
+import { loadOAuthPool, resetOAuthPoolCache, saveOAuthAccount } from "../src/providers/shared/accounts/oauth-pool.ts";
+import { decodeApiKey, encodeApiKey } from "../src/providers/gemini/credentials.ts";
+import { STATIC_MODELS } from "../src/providers/gemini/models.ts";
+import { confirmGeminiAccess } from "../src/providers/gemini/oauth.ts";
 import {
   GEMINI_SPEC,
   CATALOG_TTL_MS,
   geminiAccounts,
   createGeminiProvider,
-} from "../src/domains/subscriptions/providers/gemini.ts";
-import { chooseCredential } from "../src/domains/subscriptions/providers/oauth-pool.ts";
+} from "../src/providers/gemini/provider.ts";
+import { chooseCredential, registerPooledOAuthProvider } from "../src/providers/shared/serving.ts";
+import { model as fixtureModel, message, response } from "./fixtures/provider-stream.ts";
 
 const PROVIDER = "gemini";
 
@@ -192,6 +193,62 @@ async function withModelList(models: Record<string, unknown> | "fail", run: (cal
 }
 
 const liveModels = { "gemini-9-flash-low": { displayName: "Gemini 9 Flash (Low)" }, "gemini-9-flash-high": { displayName: "Gemini 9 Flash (High)" } };
+
+test("failed Gemini requests check the serving account and preserve independent family allowances", async (t) => {
+  await withPool(async () => {
+    const primary = account("primary", "primary@example.com");
+    saveOAuthAccount(PROVIDER, account("secondary", "secondary@example.com"));
+    const lookups: any[] = [], attempts: any[] = [];
+    const now = Date.now();
+    t.mock.method(globalThis, "fetch", async (url: any, init: any) => {
+      lookups.push({ url: String(url), token: new Headers(init.headers).get("authorization"), body: JSON.parse(init.body) });
+      return Response.json({ buckets: [
+        { modelId: "gemini-3.8-pro-high", resetTime: new Date(now + 3_600_000).toISOString() },
+        { modelId: "gemini-3.8-pro-low", remainingFraction: 0, resetTime: new Date(now + 7_200_000).toISOString() },
+        { modelId: "gemini-3.8-flash", remainingFraction: 0.9, resetTime: new Date(now + 3_600_000).toISOString() },
+      ] });
+    });
+    const stream = (selected: any, _context: any, options: any) => {
+      const token = decodeApiKey(options.apiKey).token;
+      attempts.push({ token, model: selected.id });
+      return response(message(token === primary.access && selected.id.includes("pro") ? "429" : undefined));
+    };
+    const base = createGeminiProvider();
+    let provider: any;
+    registerPooledOAuthProvider({ registerProvider: (value: any) => { provider = value; } } as any,
+      { ...GEMINI_SPEC, createProvider: () => ({ ...base, stream, streamSimple: stream }) } as any,
+      { sleep: async () => { assert.fail("healthy fallback must not wait"); } });
+    const auth = await provider.auth.oauth.toAuth(primary);
+    const pro = { ...fixtureModel, id: "gemini-3.8-pro-high" };
+    assert.equal((await provider.streamSimple(pro, {}, auth).result()).stopReason, "stop");
+    assert.equal(lookups.length, 1);
+    assert.match(lookups[0].url, /:retrieveUserQuota$/);
+    assert.equal(lookups[0].token, `Bearer ${primary.access}`);
+    assert.equal(lookups[0].body.project, primary.projectId);
+    t.mock.method(Date, "now", () => now + 20_000);
+    assert.equal((await provider.streamSimple(pro, {}, auth).result()).stopReason, "stop");
+    assert.equal((await provider.streamSimple({ ...fixtureModel, id: "gemini-3.8-flash" }, {}, auth).result()).stopReason, "stop");
+    assert.deepEqual(attempts.map((entry) => entry.token), [primary.access, "ya29.secondary", "ya29.secondary", primary.access]);
+    assert.equal(lookups.length, 1);
+    t.mock.method(Date, "now", () => now + 3_600_001);
+    assert.equal(chooseCredential(GEMINI_SPEC, primary, { modelId: pro.id })?.id, "secondary", "every exhausted bucket must reset");
+  });
+});
+
+test("Gemini usage throttling honors Retry-After without probing alternate endpoints or opening verification", async (t) => {
+  await withPool(async () => {
+    let calls = 0;
+    const now = Date.now();
+    t.mock.method(Date, "now", () => now);
+    t.mock.method(globalThis, "fetch", async () => {
+      calls++;
+      return Response.json({ error: { message: "usage endpoint throttled" } }, { status: 429, headers: { "retry-after": "600" } });
+    });
+    const retryAt = await GEMINI_SPEC.checkQuota!("main", account("primary", "primary@example.com"), "gemini-pro", new AbortController().signal);
+    assert.equal(retryAt, now + 600_000);
+    assert.equal(calls, 1);
+  });
+});
 
 test("before any refresh the static catalogue is served", () => {
   assert.deepEqual(createGeminiProvider().getModels().map((model) => model.id), STATIC_MODELS.map((model) => model.id));

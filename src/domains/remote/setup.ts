@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { agentPath } from "../../core/store.ts";
 import { runProcess, runSshCommand } from "../../core/exec/process.ts";
 import { parseTarget, readSshHosts, type SshHost } from "../../core/exec/ssh-config.ts";
-import { readRemote, writeRemoteWorkers, type RemoteWorkerRecord } from "./config-path.ts";
+import { readRemote, writeRemoteWorkers, type RemoteWorkerRecord } from "../../core/exec/hosts.ts";
 
 /**
  * `/remote` is the management surface for remote test workers.

@@ -10,8 +10,9 @@ import {
   resetOAuthPoolCache,
   saveOAuthAccount,
   setOAuthPoolMode,
-} from "../src/core/accounts/oauth-pool.ts";
-import { createPooledOAuthAdapter, registerPooledOAuthProvider } from "../src/domains/subscriptions/providers/oauth-pool.ts";
+} from "../src/providers/shared/accounts/oauth-pool.ts";
+import { createPooledOAuthAdapter, registerPooledOAuthProvider } from "../src/providers/shared/serving.ts";
+import { model, message, response } from "./fixtures/provider-stream.ts";
 
 function tempStore(): string {
   return join(tmpdir(), `pi-plus-oauth-${randomUUID()}.json`);
@@ -68,6 +69,7 @@ test("hosted sequential routing moves to account two after a rate limit", async 
       type: "oauth", id: "two", label: "Two", access: "second", refresh: "refresh", expires: Date.now() + 60_000, addedAt: 1,
     });
     let registered: any;
+    const sent: string[] = [];
     const oauth = {
       name: "Test",
       login: async () => { throw new Error("unused"); },
@@ -83,19 +85,22 @@ test("hosted sequential routing moves to account two after a rate limit", async 
         auth: { oauth },
         getModels: () => [],
         stream: (_model: any, _context: any, options: any) => {
-          void options.onResponse({ status: 429, headers: { "retry-after": "60" } }, {});
-          return {};
+          sent.push(options.headers.Authorization);
+          const limited = options.headers.Authorization === "Bearer primary";
+          void options.onResponse({ status: limited ? 429 : 200, headers: {} }, model);
+          return response(message(limited ? "429" : undefined));
         },
-        streamSimple: () => ({}),
+        streamSimple: () => { throw new Error("unused"); },
       }) as any,
-    });
+    }, { sleep: async () => { assert.fail("a healthy fallback must not wait"); } });
     const primary = { type: "oauth", access: "primary", refresh: "refresh", expires: Date.now() + 60_000 };
     const first = await registered.auth.oauth.toAuth(primary);
     assert.equal(first.headers.Authorization, "Bearer primary");
-    registered.stream({}, {}, first);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    const result = await registered.stream(model, { messages: [] }, first).result();
+    assert.equal(result.stopReason, "stop");
+    assert.deepEqual(sent, ["Bearer primary", "Bearer second"]);
     const second = await registered.auth.oauth.toAuth(primary);
-    assert.equal(second.headers.Authorization, "Bearer second");
+    assert.equal(second.headers.Authorization, "Bearer primary", "pi still owns primary auth; the stream owns failover");
   } finally {
     rmSync(path, { force: true });
     delete process.env.PI_PLUS_OAUTH_ACCOUNTS_FILE;

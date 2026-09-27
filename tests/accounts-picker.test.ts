@@ -9,7 +9,7 @@ import {
   registerAccountProvider,
   resetAccountProviders,
   type AccountProvider,
-} from "../src/core/accounts/registry.ts";
+} from "../src/providers/shared/accounts/registry.ts";
 
 function provider(accounts: Awaited<ReturnType<AccountProvider["list"]>>): AccountProvider {
   return {

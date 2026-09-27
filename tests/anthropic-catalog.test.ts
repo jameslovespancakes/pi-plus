@@ -11,8 +11,8 @@ import {
   fetchAnthropicModels,
   refreshAnthropicCatalog,
   writeAnthropicCatalog,
-} from "../src/core/anthropic/catalog.ts";
-import { buildAnthropicModels } from "../src/core/anthropic/models.ts";
+} from "../src/providers/anthropic/catalog.ts";
+import { buildAnthropicModels } from "../src/providers/anthropic/models.ts";
 
 /**
  * pi's bundled catalogue is generated at build time, so a model Anthropic

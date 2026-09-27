@@ -5,10 +5,13 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { acquireFileLease } from "../src/core/file-lease.ts";
-import { cachedClaudeQuota, observeClaudeQuota, readClaudeQuota, QUOTA_BACKOFF_MS } from "../src/core/anthropic/usage-cache.ts";
-import { parseQuota, QUOTA_FRESH_MS } from "../src/core/anthropic/quota.ts";
-import { saveAccounts, loadAccounts } from "../src/core/anthropic/store.ts";
-import { registerAnthropicProvider } from "../src/domains/subscriptions/provider.ts";
+import { cachedClaudeQuota, cachedClaudeCooldown, observeClaudeQuota, readClaudeQuota, QUOTA_BACKOFF_MS } from "../src/providers/anthropic/usage-cache.ts";
+import { parseQuota, QUOTA_FRESH_MS } from "../src/providers/anthropic/quota.ts";
+import { saveAccounts, loadAccounts } from "../src/providers/anthropic/store.ts";
+import { registerClaudeRouting } from "../src/providers/anthropic/serving.ts";
+import { anthropicAccountIdentity } from "../src/providers/anthropic/identity.ts";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import { model, message } from "./fixtures/provider-stream.ts";
 
 async function fixture(run: (dir: string) => Promise<void>) {
   const dir = mkdtempSync(join(tmpdir(), "pi-claude-usage-"));
@@ -27,7 +30,7 @@ async function fixture(run: (dir: string) => Promise<void>) {
 const account = { access: "sk-ant-oat-test-secret", identity: "test-account" };
 const body = { five_hour: { utilization: 20 }, seven_day: { utilization: 40 } };
 function childRead(target = account) {
-  const module = new URL("../src/core/anthropic/usage-cache.ts", import.meta.url).href;
+  const module = new URL("../src/providers/anthropic/usage-cache.ts", import.meta.url).href;
   const env = { ...process.env };
   delete env.NODE_TEST_CONTEXT;
   return JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", `
@@ -147,24 +150,55 @@ test("status failures retain old observations without changing OAuth credentials
   assert.deepEqual(loadAccounts(), before);
 }));
 
-test("parallel session hooks attribute primary and pooled headers to their actual bearer token", async () => fixture(async () => {
-  const primary = "sk-ant-oat-primary-hooks", secondary = "sk-ant-oat-secondary-hooks";
-  saveAccounts({ accounts: [{ id: "second", type: "oauth", access: secondary, identity: "second-id" }] });
-  const handlers = () => {
-    const hooks = new Map<string, (event: any) => void>();
-    registerAnthropicProvider({ registerProvider() {}, registerCommand() {}, on: (name: string, fn: any) => { hooks.set(name, fn); } } as any);
-    return hooks;
+test("overlapping Claude requests attribute reversed responses to the credential actually sent", async () => fixture(async () => {
+  const primary = "sk-ant-oat-primary-stream", secondary = "sk-ant-oat-secondary-stream";
+  for (const [access, identity] of [[primary, "primary-stream-id"], [secondary, "second-stream-id"]]) {
+    await anthropicAccountIdentity(access, async () => new Response(JSON.stringify({ oauth_account: { account_uuid: identity } }), { status: 200 }));
+  }
+  saveAccounts({ accounts: [{ id: "second", type: "oauth", access: secondary, identity: "second-stream-id", refresh: "second-refresh", expires: Date.now() + 3_600_000 }] });
+  const attempts = new Map<string, any>();
+  const stream = (_model: any, _context: any, options: any) => {
+    const events = createAssistantMessageEventStream();
+    attempts.set(options.apiKey, { options, events });
+    return events;
   };
-  const a = handlers(), b = handlers();
-  a.get("before_provider_headers")!({ headers: { Authorization: `Bearer ${primary}` } });
-  b.get("before_provider_headers")!({ headers: { authorization: `Bearer ${secondary}` } });
-  a.get("after_provider_response")!({ headers: { "anthropic-ratelimit-unified-5h-utilization": "0.1" } });
-  b.get("after_provider_response")!({ headers: { "anthropic-ratelimit-unified-5h-utilization": "0.7" } });
+  let provider: any;
+  registerClaudeRouting({ registerProvider: (value: any) => { provider = value; } } as any, {
+    id: "anthropic", auth: { oauth: { toAuth: async (credential: any) => ({ apiKey: credential.access }) } }, stream, streamSimple: stream,
+  } as any);
+  const request = async (access: string) => {
+    const auth = await provider.auth.oauth.toAuth({ type: "oauth", access, refresh: `${access}-refresh`, expires: Date.now() + 3_600_000 });
+    return provider.streamSimple(model, { messages: [] }, auth);
+  };
+  const a = await request(primary), b = await request(secondary);
+  await new Promise((resolve) => setImmediate(resolve));
+  for (const [access, utilization] of [[secondary, "0.7"], [primary, "0.1"]]) {
+    const attempt = attempts.get(access);
+    await attempt.options.onResponse({ status: 200, headers: { "anthropic-ratelimit-unified-5h-utilization": utilization } }, model);
+    attempt.events.push({ type: "done", reason: "stop", message: message() });
+    attempt.events.end();
+  }
+  await Promise.all([a.result(), b.result()]);
   assert.equal(cachedClaudeQuota({ access: primary })?.five_hour?.remainingPercent, 90);
-  assert.equal(cachedClaudeQuota({ access: secondary, identity: "second-id" })?.five_hour?.remainingPercent, 30);
-  // A later unrelated provider response must not reuse either credential.
-  a.get("after_provider_response")!({ headers: { "anthropic-ratelimit-unified-5h-utilization": "1" } });
-  assert.equal(cachedClaudeQuota({ access: primary })?.five_hour?.remainingPercent, 90);
+  assert.equal(cachedClaudeQuota({ access: secondary, identity: "second-stream-id" })?.five_hour?.remainingPercent, 30);
+  const apiKey = provider.streamSimple(model, { messages: [] }, { apiKey: "ordinary-api-key" });
+  assert.equal(attempts.get("ordinary-api-key").options.onResponse, undefined, "unrelated API-key requests are not attributed to OAuth");
+  attempts.get("ordinary-api-key").events.push({ type: "done", reason: "stop", message: message() });
+  attempts.get("ordinary-api-key").events.end();
+  await apiKey.result();
+}));
+
+test("headerless request limits survive successful concurrent Claude status polling", async () => fixture(async () => {
+  const now = Date.now();
+  let finish!: (response: Response) => void;
+  globalThis.fetch = () => new Promise((resolve) => { finish = resolve; });
+  const polling = readClaudeQuota(account, now);
+  observeClaudeQuota(account.access, { "retry-after": "180" }, now + 1, { status: 429, modelId: "claude-opus-5-5" });
+  assert.ok((cachedClaudeCooldown(account, "claude-opus-5-5") ?? 0) >= now + 180_000);
+  finish(new Response(JSON.stringify(body), { status: 200 }));
+  await polling;
+  assert.ok((cachedClaudeCooldown(account, "claude-opus-5-5") ?? 0) >= now + 180_000, "status success must preserve request cooldowns");
+  assert.equal(cachedClaudeCooldown(account, "claude-sonnet-4-6"), undefined, "model-specific blocks stay scoped");
 }));
 
 test("a partially written lease cannot be mistaken for a stale lock", async () => fixture(async (dir) => {

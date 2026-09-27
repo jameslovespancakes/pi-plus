@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { quotaStateFromHeaders, selectRoutingCandidate } from "../src/core/accounts/routing.ts";
-import { selectAccount } from "../src/core/anthropic/routing.ts";
+import { quotaStateFromHeaders, selectRoutingCandidate } from "../src/providers/shared/accounts/routing.ts";
+import { selectAccount } from "../src/providers/anthropic/routing.ts";
 
 const candidate = (
   id: string,

@@ -1,7 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { CLAUDE_FRESH_MS, combinedWindow, isFresh } from "../src/core/quota/pool.ts";
-import { renderUsageLines } from "../src/ui/usage-bars.ts";
+import { USAGE_FRESH_MS, isFresh } from "../src/providers/shared/quota/pool.ts";
+import { combinedWindow } from "../src/providers/anthropic/usage-pool.ts";
+import { renderUsageLines as renderUsageView } from "../src/ui/usage-bars.ts";
+import { createUsageView } from "../src/providers/usage/presentation.ts";
+import type { UsageState } from "../src/providers/usage/service.ts";
+import type { ActiveModel } from "../src/providers/shared/quota/view.ts";
+
+function renderUsageLines(state: UsageState, theme: any, width: number, active?: ActiveModel): string[] {
+  return renderUsageView(createUsageView(state, active), theme, width);
+}
 
 const theme = { fg: (_c: string, t: string) => t, bold: (t: string) => t };
 const now = Date.now();
@@ -141,7 +149,7 @@ test("a row without checkedAt is never fresh", () => {
 test("the freshness window exceeds the 10 minute poll interval", () => {
   // Idle accounts are polled at most once per 10 minutes. A shorter freshness
   // bound would mark them stale almost always.
-  assert.ok(CLAUDE_FRESH_MS > 10 * 60_000, `expected > 10min, got ${CLAUDE_FRESH_MS}ms`);
+  assert.ok(USAGE_FRESH_MS > 10 * 60_000, `expected > 10min, got ${USAGE_FRESH_MS}ms`);
 });
 
 test("pooling needs every account, unless partial is allowed", () => {

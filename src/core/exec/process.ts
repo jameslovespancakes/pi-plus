@@ -1,15 +1,7 @@
-import { spawn } from "node:child_process";
-import { createReadStream } from "node:fs";
+import { runBoundedProcess } from "./bounded-process.ts";
 
-/**
- * Process and SSH execution primitives.
- *
- * Extracted from the remote-jobs extension so anything needing a bounded child
- * process gets the same timeout, abort and output-cap behaviour.
- */
-
+/** SSH policy and the tail-capturing view of the shared process runner. */
 export const SSH_ARGS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=8"];
-
 const PROCESS_TAIL_CHARS = 2 * 1024 * 1024;
 
 export interface ProcessResult {
@@ -29,97 +21,27 @@ export interface RunOptions {
   onData?: (chunk: string) => void;
 }
 
-/** Keeps only the trailing window of a stream so long builds cannot exhaust memory. */
 export function appendTail(current: string, chunk: string): string {
   const next = current + chunk;
   return next.length > PROCESS_TAIL_CHARS ? next.slice(-PROCESS_TAIL_CHARS) : next;
 }
 
-export function runProcess(command: string, args: string[], options: RunOptions = {}): Promise<ProcessResult> {
-  return new Promise((resolvePromise, reject) => {
-    const child = spawn(command, args, {
-      cwd: options.cwd,
-      shell: false,
-      stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
-      windowsHide: true,
-    });
-
-    let stdout = "";
-    let stderr = "";
-    let totalOutputBytes = 0;
-    let timedOut = false;
-    let aborted = false;
-    let settled = false;
-    let timer: NodeJS.Timeout | undefined;
-
-    const finishReject = (error: Error) => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      reject(error);
-    };
-
-    const kill = () => {
-      try {
-        child.kill("SIGTERM");
-      } catch {
-        // Process already exited.
-      }
-    };
-
-    child.stdout?.on("data", (data: Buffer) => {
-      const text = data.toString("utf8");
-      totalOutputBytes += data.length;
-      stdout = appendTail(stdout, text);
-      options.onData?.(text);
-    });
-
-    child.stderr?.on("data", (data: Buffer) => {
-      const text = data.toString("utf8");
-      totalOutputBytes += data.length;
-      stderr = appendTail(stderr, text);
-      options.onData?.(text);
-    });
-
-    child.on("error", finishReject);
-
-    if (options.timeoutSeconds) {
-      timer = setTimeout(() => {
-        timedOut = true;
-        kill();
-      }, options.timeoutSeconds * 1000);
-    }
-
-    const onAbort = () => {
-      aborted = true;
-      kill();
-    };
-
-    if (options.signal) {
-      if (options.signal.aborted) onAbort();
-      else options.signal.addEventListener("abort", onAbort, { once: true });
-    }
-
-    if (typeof options.input === "string" || Buffer.isBuffer(options.input)) {
-      child.stdin?.end(options.input);
-    } else if (options.input?.file && child.stdin) {
-      const target = child.stdin;
-      const stream = createReadStream(options.input.file);
-      stream.on("error", (error) => {
-        kill();
-        finishReject(error);
-      });
-      stream.pipe(target);
-    }
-
-    child.on("close", (code) => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      options.signal?.removeEventListener("abort", onAbort);
-      resolvePromise({ code: code ?? 1, stdout, stderr, timedOut, aborted, totalOutputBytes });
-    });
+export async function runProcess(command: string, args: string[], options: RunOptions = {}): Promise<ProcessResult> {
+  const result = await runBoundedProcess({
+    file: command, args, cwd: options.cwd ?? process.cwd(), stdin: options.input,
+    signal: options.signal,
+    timeoutMs: options.timeoutSeconds ? options.timeoutSeconds * 1_000 : undefined,
+    tailChars: PROCESS_TAIL_CHARS, onData: options.onData,
+    abortError: "Process aborted", timeoutError: "Process timed out",
+    exitError: (stderr, code) => stderr || `Process exited with code ${code ?? 1}`,
   });
+  if (result.failure?.kind === "spawn" || result.failure?.kind === "input") throw new Error(result.failure.message);
+  return {
+    code: result.ok ? 0 : result.failure.kind === "exit" ? result.failure.code ?? 1 : 1,
+    stdout: result.stdout, stderr: result.stderr,
+    timedOut: result.failure?.kind === "timeout", aborted: result.failure?.kind === "abort",
+    totalOutputBytes: result.bytes,
+  };
 }
 
 export async function runLocal(command: string, args: string[], cwd?: string): Promise<ProcessResult> {

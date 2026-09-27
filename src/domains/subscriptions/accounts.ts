@@ -11,7 +11,7 @@ import {
   type AccountContext,
   type AccountProvider,
   type ManagedAccount,
-} from "../../core/accounts/registry.ts";
+} from "../../providers/shared/accounts/registry.ts";
 
 /**
  * `/accounts` is provider-agnostic subscription account management.

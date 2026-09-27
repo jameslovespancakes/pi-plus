@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { registerClaudeRemote } from "../src/domains/claude-remote/index.ts";
-import { createTokenSource } from "../src/domains/claude-remote/auth.ts";
+import { createTokenSource } from "../src/providers/anthropic/remote-control/auth.ts";
 import { readConfig, resetConfigCache, updateConfig } from "../src/core/config.ts";
 
 function setup(t: any) {

@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { agentPath } from "../../core/store.ts";
 import { env, setEnv } from "../../core/env.ts";
 import { runSshCommand } from "../../core/exec/process.ts";
-import { readRemote } from "../remote/config-path.ts";
+import { readRemote } from "../../core/exec/hosts.ts";
 
 /**
  * `/board setup | restart | clear`

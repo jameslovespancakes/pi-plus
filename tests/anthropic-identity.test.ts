@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { anthropicAccountIdentity } from "../src/core/anthropic/identity.ts";
+import { anthropicAccountIdentity } from "../src/providers/anthropic/identity.ts";
 
 test("Claude account identity comes from the bootstrap account UUID", async () => {
   const requests: Array<{ url: string; authorization?: string }> = [];

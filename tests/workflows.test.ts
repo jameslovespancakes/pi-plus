@@ -3,14 +3,14 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { Semaphore, parallel } from "../src/domains/workflows/runtime/concurrency.ts";
-import { workflowRunsDir } from "../src/domains/workflows/runtime/journal.ts";
-import { resolveWorkflowRunOptions } from "../src/domains/workflows/runtime/options.ts";
-import { toDisplayLine, toDisplayText } from "../src/domains/workflows/runtime/ui/display-text.ts";
-import { WorkflowInspector } from "../src/domains/workflows/runtime/ui/workflow-inspector.ts";
-import { renderWorkflowWidgetLines } from "../src/domains/workflows/runtime/ui/workflow-widget.ts";
-import { ProgressTracker } from "../src/domains/workflows/runtime/progress.ts";
-import { WorkflowUsageRecorder } from "../src/domains/workflows/runtime/usage.ts";
+import { Semaphore, parallel } from "../src/domains/workflows/execution/concurrency.ts";
+import { workflowRunsDir } from "../src/domains/workflows/replay/journal.ts";
+import { resolveWorkflowRunOptions } from "../src/domains/workflows/definitions/options.ts";
+import { toDisplayLine, toDisplayText } from "../src/domains/workflows/ui/display-text.ts";
+import { WorkflowInspector } from "../src/domains/workflows/ui/workflow-inspector.ts";
+import { renderWorkflowWidgetLines } from "../src/domains/workflows/ui/workflow-widget.ts";
+import { ProgressTracker } from "../src/domains/workflows/runs/progress.ts";
+import { WorkflowUsageRecorder } from "../src/domains/workflows/execution/usage.ts";
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -56,7 +56,7 @@ test("workflow limits are opt-in", () => {
   assert.equal(options.agentTimeoutMs, null);
   assert.equal(options.parallelSubmissionLimit, null);
   assert.equal(options.budget, null);
-  assert.equal(options.agentRetries, 0);
+  assert.equal("agentRetries" in options, false, "request recovery has no public retry-count setting");
 
   const limited = resolveWorkflowRunOptions({ concurrency: 3, maxAgents: 8, agentTimeoutMs: 5_000, budget: 2_000 }, {});
   assert.equal(limited.concurrency, 3);
@@ -183,14 +183,13 @@ test("built-in workflows and one command surface are bundled directly", () => {
   assert.equal(settings.packages.includes("npm:pi-workflow-engine"), false);
 
   const entry = readFileSync(join(process.cwd(), "src", "domains", "workflows", "index.ts"), "utf8");
-  const dynamax = readFileSync(join(process.cwd(), "src", "domains", "workflows", "runtime", "dynamax.ts"), "utf8");
+  const dynamax = readFileSync(join(process.cwd(), "src", "domains", "workflows", "ui", "dynamax.ts"), "utf8");
   assert.equal(entry.match(/registerCommand\("workflow"/g)?.length, 1);
   assert.doesNotMatch(`${entry}\n${dynamax}`, /registerCommand\("workflow:/);
   assert.doesNotMatch(entry, /\/workflow info|name === "info"/);
-  const runtime = join(process.cwd(), "src/domains/workflows/runtime");
-  assert.equal(existsSync(join(runtime, "background-workflows.ts")), false);
-  assert.equal(existsSync(join(runtime, "background-workflow-tool.ts")), false);
-  const lifecycle = readFileSync(join(runtime, "workflow-lifecycle.ts"), "utf8");
+  const workflows = join(process.cwd(), "src/domains/workflows");
+  assert.equal(existsSync(join(workflows, "runtime")), false);
+  const lifecycle = readFileSync(join(workflows, "runs/workflow-lifecycle.ts"), "utf8");
   assert.doesNotMatch(lifecycle, /setWidget|setStatus|BACKGROUND_WIDGET/);
-  assert.doesNotMatch(readFileSync(join(runtime, "engine.ts"), "utf8"), /WorkflowInspector|ui\.custom/);
+  assert.doesNotMatch(readFileSync(join(workflows, "execution/engine.ts"), "utf8"), /WorkflowInspector|ui\.custom/);
 });

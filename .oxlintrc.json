@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "ignorePatterns": [
-    "src/core/anthropic/vendor/**",
+    "src/providers/anthropic/vendor/**",
     "node_modules/**"
   ],
   "categories": {

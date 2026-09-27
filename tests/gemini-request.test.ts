@@ -3,14 +3,14 @@ import assert from "node:assert/strict";
 import type { AssistantMessage, Context, Message, Tool } from "@earendil-works/pi-ai";
 import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
 import { Type } from "typebox";
-import { STATIC_MODELS } from "../src/core/gemini/models.ts";
+import { STATIC_MODELS } from "../src/providers/gemini/models.ts";
 import {
   CONTINUE_TEXT,
   buildRequest,
   repairContents,
   requiresThoughtSignatures,
   type Content,
-} from "../src/core/gemini/request.ts";
+} from "../src/providers/gemini/request.ts";
 
 /**
  * pi 0.87 keeps the system prompt and the tool set inside the transcript's

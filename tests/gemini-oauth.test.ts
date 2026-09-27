@@ -5,14 +5,14 @@ import {
   extractProjectId,
   fallbackProjectId,
   stableUuid,
-} from "../src/core/gemini/client.ts";
+} from "../src/providers/gemini/client.ts";
 import {
   credentialEmail,
   credentialProjectId,
   decodeApiKey,
   encodeApiKey,
-} from "../src/core/gemini/credentials.ts";
-import { geminiOAuth, requestProjectId } from "../src/core/gemini/oauth.ts";
+} from "../src/providers/gemini/credentials.ts";
+import { geminiOAuth, requestProjectId } from "../src/providers/gemini/oauth.ts";
 import { oauthSuccessHtml } from "../src/core/oauth/callback-server.ts";
 
 interface Call { url: string; body: any }

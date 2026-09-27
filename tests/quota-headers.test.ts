@@ -5,7 +5,7 @@ import {
   parseQuota,
   isFresh,
   QUOTA_FRESH_MS,
-} from "../src/core/anthropic/quota.ts";
+} from "../src/providers/anthropic/quota.ts";
 
 /** Real headers captured from a live /v1/messages reply. */
 const LIVE = {

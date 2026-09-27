@@ -2,10 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
 import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
-import { GEMINI_ENDPOINTS, GEMINI_USER_AGENT } from "../src/core/gemini/client.ts";
-import { encodeApiKey } from "../src/core/gemini/credentials.ts";
-import { STATIC_MODELS } from "../src/core/gemini/models.ts";
-import { describeFailure, parseDuration, stream, streamSimple } from "../src/core/gemini/stream.ts";
+import { GEMINI_ENDPOINTS, GEMINI_USER_AGENT } from "../src/providers/gemini/client.ts";
+import { encodeApiKey } from "../src/providers/gemini/credentials.ts";
+import { STATIC_MODELS } from "../src/providers/gemini/models.ts";
+import { describeFailure, parseDuration, stream, streamSimple } from "../src/providers/gemini/stream.ts";
 
 /**
  * Gemini wraps every SSE frame in `.response`, answers from three

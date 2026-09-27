@@ -1,6 +1,6 @@
 import type { Component } from "@earendil-works/pi-tui";
 import { hasTruecolor, levelColor } from "../../ui/format.ts";
-import type { AccountProvider, ManagedAccount } from "../../core/accounts/registry.ts";
+import type { AccountProvider, ManagedAccount } from "../../providers/shared/accounts/registry.ts";
 
 /** Inline account picker grouped by provider. */
 

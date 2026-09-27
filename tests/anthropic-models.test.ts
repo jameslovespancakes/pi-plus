@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import type { Model } from "@earendil-works/pi-ai";
 import { ANTHROPIC_MODELS as PI_ANTHROPIC_MODELS } from "@earendil-works/pi-ai/providers/anthropic.models";
-import { ANTHROPIC_MODELS } from "../src/core/anthropic/models.ts";
+import { ANTHROPIC_MODELS } from "../src/providers/anthropic/models.ts";
 
 /**
  * `registerProvider("anthropic", { models })` substitutes pi's catalogue

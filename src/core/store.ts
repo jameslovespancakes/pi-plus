@@ -1,6 +1,7 @@
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
+import { writeAtomicTextSync } from "./storage/atomic.ts";
 
 /** Shared JSON storage with atomic writes. */
 
@@ -20,16 +21,13 @@ export function readJson<T>(path: string, fallback: T): T {
   }
 }
 
-/** Best-effort atomic write. */
+/** Best-effort cache/config write. Retains the legacy direct-write fallback; strict callers use storage/atomic.ts directly. */
 export function writeJson(path: string, value: unknown, pretty = false, mode?: number): boolean {
-  const temp = `${path}.${process.pid}.tmp`;
   const content = JSON.stringify(value, undefined, pretty ? 2 : undefined);
   const options = { encoding: "utf8" as const, ...(mode === undefined ? {} : { mode }) };
 
   try {
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(temp, content, options);
-    renameSync(temp, path);
+    writeAtomicTextSync(path, content, { mode });
     return true;
   } catch {
     try {
@@ -37,8 +35,6 @@ export function writeJson(path: string, value: unknown, pretty = false, mode?: n
       return true;
     } catch {
       return false;
-    } finally {
-      try { rmSync(temp, { force: true }); } catch { /* best effort */ }
     }
   }
 }

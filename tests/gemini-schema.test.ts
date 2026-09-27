@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Type } from "typebox";
-import { bridgeSchema, selfContainedSchema } from "../src/core/gemini/schema.ts";
+import { bridgeSchema, selfContainedSchema } from "../src/providers/gemini/schema.ts";
 
 /**
  * Gemini takes JSON Schema only when self-contained, and its

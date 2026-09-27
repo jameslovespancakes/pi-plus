@@ -92,6 +92,10 @@ follows account order. **`/usage`** refreshes the bars.
 Claude usage comes from response headers first, with a shared cached status
 fetch when needed. Cooldowns survive restarts and are respected by `/usage`;
 usage checks never generate model responses or consume inference tokens.
+After limit failures, Claude, Codex, and Gemini can recheck the serving account's
+non-inference usage endpoint. Checks are shared and throttled, honor available
+cache data and server cooldowns, and never prevent failover if status is unavailable.
+Model-specific allowances remain separate.
 
 Gemini login and reauthorization confirm account access before reporting success.
 If Google requires verification, its verification page opens through pi's auth UI;
@@ -154,6 +158,21 @@ diagnostics, research, and refactoring workflows support parallel agents,
 worktree isolation, replay, and usage accounting. Every run returns immediately;
 results arrive when it finishes. There is no separate foreground/background mode.
 
+Live and finished runs share readable titles (for example, `Trace Launch 3`),
+with recorded cost beside the title when available. Completion appears immediately
+as a compact inline result; expand it for the run ID and usage breakdown. The
+parent receives a bounded result at its next safe turn boundary, or wakes if idle.
+Cancellation is respected. Live widgets clear on completion, failure, pause, or
+stop, and late progress updates cannot bring them back.
+
+Pooled subscription requests automatically try other eligible accounts on the
+same model, then make three further eligibility checks after waits of **10, 25,
+and 60 seconds**. Server cooldowns and exhausted quota windows are respected;
+without a reset hint, a temporary limit becomes eligible at the first fallback.
+Recovery retries the pending request, not the agent or its completed tools.
+There is no `agentRetries` setting. Once streamed output has been exposed,
+automatic retries and workflow auto-resume stop rather than replaying it.
+
 ```text
  Task → parallel agents → findings → result
 ```
@@ -165,6 +184,10 @@ results arrive when it finishes. There is no separate foreground/background mode
 
 **`/workflow`** opens the running agent board. Enter inspects, Esc goes back,
 and X stops the selected agent from the list. Inspection needs at least 80×24.
+PgUp/PgDn scroll agent chat; Ctrl+Home/Ctrl+End jump to the start/end. Mouse-wheel
+scrolling works where pi supplies mouse events (fullscreen mode). New output
+keeps your reading position until you return to the bottom. The board no longer
+shows a latest-output preview.
 The inspector uses pi's native message/tool rendering and editor. Enter steers;
 Alt+Enter queues a follow-up. `/model provider/model` and `/thinking level`
 affect only that agent. Other parent-session commands are not forwarded.
@@ -179,7 +202,11 @@ The file shape is `{ "profiles": { "small": { "model": "provider/model-id",
 "thinkingLevel": "high" } } }`.
 
 The main agent can use `workflow({ action: "list" })`, or `inspect`/`stop` with
-`runId` and optionally `agentId`. Activity is fetched on demand, not injected
+`runId` and optionally `agentId`. Status checks show only running/stopping agents;
+inspection includes at most the last 10 visible transcript entries across the
+shown agents, including actual tool output but excluding private thinking.
+Lists are capped at 10 active runs and 20 agents total; inspection shows at most
+20 agents, with bounded log text. Activity is fetched on demand, not injected
 into every turn. Limits on concurrency, agents, time, and output tokens remain
 optional.
 
@@ -214,17 +241,28 @@ pi install /path/to/pi-plus
 npm install && npm run verify
 ```
 
+## Source Architecture
+
+- `src/core/`: shared configuration, storage, OAuth and process/SSH primitives.
+- `src/providers/`: provider-specific auth, transport, quota and policy, plus shared account serving/recovery.
+- `src/domains/`: seven thin pi extensions; workflows are grouped by execution, agents, runs, replay, workspace and UI.
+- `src/ui/`: terminal components that render prepared data without provider rules.
+
+[Architecture and ownership](https://github.com/jameslovespancakes/pi-plus/blob/main/docs/architecture.md)
+are guarded by dependency and runtime-cycle tests. Existing credential and run
+storage formats are preserved.
+
 ## Sources & Credits
 
 | Project | Contribution |
 | --- | --- |
 | [pi](https://pi.dev/) | Host agent, extension API, session and authentication lifecycle |
-| [claude-remote-lib](https://github.com/clepdn/claude-remote-lib) | Remote Control protocol ([provenance & license](src/core/claude-remote/UPSTREAM.md)) |
+| [claude-remote-lib](https://github.com/clepdn/claude-remote-lib) | Remote Control protocol ([provenance & license](src/providers/anthropic/remote-control/UPSTREAM.md)) |
 | [pi-claude-remote](https://github.com/clepdn/pi-claude-remote) | Behavior reference for the independently implemented remote adapter |
 | [pi-workflow-engine](https://github.com/timbrinded/pi-workflow-engine) | Embedded workflow runtime ([MIT](src/domains/workflows/LICENSE.md)) |
-| [pi-antigravity](https://github.com/Rahularya01/pi-antigravity) | Gemini provider reference ([MIT](src/core/gemini/LICENSE.md)) |
+| [pi-antigravity](https://github.com/Rahularya01/pi-antigravity) | Gemini provider reference ([MIT](src/providers/gemini/LICENSE.md)) |
 | [pi-anthropic-auth](https://github.com/cortexkit/anthropic-auth) | Original subscription integration, since reimplemented (MIT) |
-| [xxhash-wasm](https://github.com/jungomi/xxhash-wasm) | Vendored billing checksum ([MIT](src/core/anthropic/vendor/xxhash-wasm.LICENSE.md)) |
+| [xxhash-wasm](https://github.com/jungomi/xxhash-wasm) | Vendored billing checksum ([MIT](src/providers/anthropic/vendor/xxhash-wasm.LICENSE.md)) |
 | [Artificial Analysis](https://artificialanalysis.ai/) | Model benchmark data |
 
 ## Disclaimer

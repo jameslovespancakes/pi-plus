@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fetchUserQuota } from "../src/core/gemini/client.ts";
-import { geminiQuotaFamily, summarizeGeminiQuota } from "../src/core/gemini/quota.ts";
+import { fetchUserQuota } from "../src/providers/gemini/client.ts";
+import { geminiQuotaFamily, summarizeGeminiQuota } from "../src/providers/gemini/quota.ts";
 
 test("public and runtime ids map onto the family that pools their quota", () => {
   assert.equal(geminiQuotaFamily("gemini-3.8-flash"), "Flash");

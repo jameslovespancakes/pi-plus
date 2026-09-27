@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { getSupportedThinkingLevels, type Api, type Model } from "@earendil-works/pi-ai";
 import { GOOGLE_MODELS } from "@earendil-works/pi-ai/providers/google.models";
-import { GEMINI_ENDPOINT } from "../src/core/gemini/client.ts";
+import { GEMINI_ENDPOINT } from "../src/providers/gemini/client.ts";
 import {
   GEMINI_API,
   GEMINI_PROVIDER,
@@ -13,7 +13,7 @@ import {
   runtimeModelId,
   thinkingConfig,
   withStaticModels,
-} from "../src/core/gemini/models.ts";
+} from "../src/providers/gemini/models.ts";
 
 const byId = (id: string) => STATIC_MODELS.find((model) => model.id === id)!;
 const routes = (model: Model<Api>) =>

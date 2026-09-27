@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { accountProvider, routableProviders, type RoutingMode } from "../../core/accounts/registry.ts";
+import { accountProvider, routableProviders, type RoutingMode } from "../../providers/shared/accounts/registry.ts";
 
 /**
  * `/routing [sequential|quota-aware] [provider]`

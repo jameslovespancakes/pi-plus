@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
-import { ClaudeRemoteBridge, type BridgeOptions } from "../src/core/claude-remote/bridge.ts";
-import { inboundText, mirrorMessage, parseSSE, RecentIds } from "../src/core/claude-remote/protocol.ts";
+import { ClaudeRemoteBridge, type BridgeOptions } from "../src/providers/anthropic/remote-control/bridge.ts";
+import { inboundText, mirrorMessage, parseSSE, RecentIds } from "../src/providers/anthropic/remote-control/protocol.ts";
 
 async function until(check: () => boolean): Promise<void> {
   const deadline = Date.now() + 2000;

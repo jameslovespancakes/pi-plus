@@ -2,15 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  CLAUDE_FRESH_MS,
-  combinedWindow,
-  isClaudeAccount,
-  isFresh,
-  poolAvailability,
-  scopedLabels,
-  type UsageRow,
-} from "../src/core/quota/pool.ts";
+import { USAGE_FRESH_MS, isFresh, type UsageRow } from "../src/providers/shared/quota/pool.ts";
+import { combinedWindow, isClaudeAccount, poolAvailability, scopedLabels } from "../src/providers/anthropic/usage-pool.ts";
 
 const NOW = 1_700_000_000_000;
 
@@ -29,7 +22,7 @@ test("isFresh rejects stale, old, and already-reset rows", () => {
   assert.equal(isFresh(row({ group: "Claude A", label: "5h", remaining: 50, stale: true }), NOW), false);
   assert.equal(isFresh(row({ group: "Claude A", label: "5h", remaining: 50, checkedAt: undefined }), NOW), false);
   assert.equal(
-    isFresh(row({ group: "Claude A", label: "5h", remaining: 50, checkedAt: NOW - CLAUDE_FRESH_MS - 1 }), NOW),
+    isFresh(row({ group: "Claude A", label: "5h", remaining: 50, checkedAt: NOW - USAGE_FRESH_MS - 1 }), NOW),
     false,
     "past the freshness window",
   );
@@ -125,7 +118,7 @@ test("poolAvailability counts missing and stale accounts as unknown", () => {
 
 test("recentAccounts orders by observed use and caps the list", async () => {
   process.env.PI_AGENT_DIR = join(tmpdir(), `pi-plus-recent-${Math.random()}`);
-  const service = await import(`../src/services/usage-service.ts?case=${Math.random()}`);
+  const service = await import(`../src/providers/usage/service.ts?case=${Math.random()}`);
   const state = service.usageState();
 
   state.rows = [

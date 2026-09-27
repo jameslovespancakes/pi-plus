@@ -4,15 +4,13 @@ import { randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resetOAuthPoolCache, saveOAuthAccount, setPrimaryQuota } from "../src/core/accounts/oauth-pool.ts";
-import { parseQuota } from "../src/core/anthropic/quota.ts";
-import { saveAccounts } from "../src/core/anthropic/store.ts";
-import {
-  fetchClaudeRows,
-  fetchCodexRows,
-  fetchGeminiRows,
-  observedRows,
-} from "../src/core/quota/usage-source.ts";
+import { resetOAuthPoolCache, saveOAuthAccount, setPrimaryQuota } from "../src/providers/shared/accounts/oauth-pool.ts";
+import { parseQuota } from "../src/providers/anthropic/quota.ts";
+import { saveAccounts } from "../src/providers/anthropic/store.ts";
+import { fetchClaudeRows } from "../src/providers/anthropic/usage.ts";
+import { fetchCodexRows } from "../src/providers/codex/usage.ts";
+import { fetchGeminiRows } from "../src/providers/gemini/usage.ts";
+import { observedRows } from "../src/providers/usage/observed.ts";
 
 const HOUR = 3_600_000;
 

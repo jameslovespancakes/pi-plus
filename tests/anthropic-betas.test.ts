@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { clientIdentityHeaders, identityBetas } from "../src/core/anthropic/client-identity.ts";
+import { clientIdentityHeaders, identityBetas } from "../src/providers/anthropic/client-identity.ts";
 
 /**
  * pi enables model-specific betas that authorise fields pi itself emits.

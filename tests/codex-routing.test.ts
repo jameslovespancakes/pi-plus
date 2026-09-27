@@ -6,13 +6,28 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { readFileSync } from "node:fs";
 import type { OAuthCredential } from "@earendil-works/pi-ai";
-import { loadCodexAccounts, saveCodexAccounts } from "../src/core/codex/store.ts";
-import { OAUTH_REFRESH_TIMEOUT_MS, refreshAbortSignal } from "../src/core/accounts/routing.ts";
+import { applyCodexQuotaHeaders } from "../src/providers/codex/quota.ts";
+import { loadCodexAccounts, saveCodexAccounts } from "../src/providers/codex/store.ts";
+import { OAUTH_REFRESH_TIMEOUT_MS, refreshAbortSignal } from "../src/providers/shared/accounts/routing.ts";
 import {
   chooseCodexCredential,
   codexRoutingMode,
-  registerCodexProvider,
-} from "../src/domains/subscriptions/providers/codex.ts";
+  CODEX_SPEC,
+} from "../src/providers/codex/provider.ts";
+
+import { chooseCredential, registerPooledOAuthProvider } from "../src/providers/shared/serving.ts";
+import { model, message, response } from "./fixtures/provider-stream.ts";
+
+function providerFixture(respond = (_model: any, _options: any) => response(message())) {
+  let provider: any;
+  const sent: any[] = [];
+  const base = CODEX_SPEC.createProvider();
+  const stream = (selected: any, _context: any, options: any) => { sent.push(options); return respond(selected, options); };
+  registerPooledOAuthProvider({ registerProvider: (value: any) => { provider = value; } } as any, {
+    ...CODEX_SPEC, createProvider: () => ({ ...base, stream, streamSimple: stream }),
+  }, { sleep: async () => { assert.fail("healthy account must not wait"); } });
+  return { provider, sent };
+}
 
 const primary: OAuthCredential = {
   type: "oauth",
@@ -63,7 +78,7 @@ test("Codex sequential routing moves to account two when account one is exhauste
   });
 });
 
-test("Codex quota-aware routing is wired into provider request auth", async () => {
+test("Codex quota-aware routing selects the credential actually sent by the stream", async () => {
   await withCodexStore(async (path) => {
     saveCodexAccounts({
       main: { quota: quota(20) },
@@ -77,10 +92,11 @@ test("Codex quota-aware routing is wired into provider request auth", async () =
       }],
     }, path);
 
-    let provider: any;
-    registerCodexProvider({ registerProvider: (value: any) => { provider = value; } } as any);
+    const { provider, sent } = providerFixture();
     const auth = await provider.auth.oauth.toAuth(primary);
-    assert.equal(auth.apiKey, "most-access");
+    assert.equal(auth.apiKey, "primary-access");
+    await provider.streamSimple(model, { messages: [] }, auth).result();
+    assert.equal(sent[0].apiKey, "most-access");
   });
 });
 
@@ -106,11 +122,11 @@ test("routing a request preserves the rich Codex quota snapshot", async () => {
       }],
     }, path);
 
-    let provider: any;
-    registerCodexProvider({ registerProvider: (value: any) => { provider = value; } } as any);
-    // Drives the pooled `lastUsed` write, which is where the clobber happened.
+    const { provider, sent } = providerFixture();
+    // The actual stream drives the pooled lastUsed write, not auth resolution.
     const auth = await provider.auth.oauth.toAuth(primary);
-    assert.equal(auth.apiKey, "pooled-access", "the pooled account served the request");
+    await provider.stream(model, { messages: [] }, auth).result();
+    assert.equal(sent[0].apiKey, "pooled-access", "the pooled account served the request");
 
     const stored = loadCodexAccounts(path).accounts[0]!;
     assert.equal(stored.quota?.five_hour?.remainingPercent, 64, "window detail survives");
@@ -138,6 +154,52 @@ test("an exhausted account with no reset never persists an Infinity block", asyn
 
     assert.equal(chooseCodexCredential(primary).id, "two", "exhausted main is skipped");
     assert.ok(!readFileSync(path, "utf8").includes("null"), "no Infinity round-tripped to null");
+  });
+});
+
+test("headerless Codex limits check the serving account and persist exhaustion beyond the retry cooldown", async (t) => {
+  await withCodexStore(async (path) => {
+    saveCodexAccounts({ main: { quota: quota(0) }, accounts: [
+      { id: "limited", access: "limited-access", refresh: "r1", expires: primary.expires, accountId: "chat-limited" },
+      { id: "healthy", access: "healthy-access", refresh: "r2", expires: primary.expires, accountId: "chat-healthy" },
+    ] }, path);
+    const lookups: any[] = [];
+    t.mock.method(globalThis, "fetch", async (url: any, init: any) => {
+      lookups.push({ url: String(url), headers: new Headers(init.headers) });
+      return Response.json({ plan_type: "pro", rate_limit: {
+        primary_window: { used_percent: 20, limit_window_seconds: 18000, reset_at: (Date.now() + 3_600_000) / 1000 },
+        secondary_window: { used_percent: 100, limit_window_seconds: 604800, reset_at: (Date.now() + 86_400_000) / 1000 },
+      } });
+    });
+    const { provider, sent } = providerFixture((_model, options) => response(message(options.apiKey === "limited-access" ? "429" : undefined)));
+    const auth = await provider.auth.oauth.toAuth(primary);
+    assert.equal((await provider.streamSimple(model, {}, auth).result()).stopReason, "stop");
+    assert.deepEqual(sent.map((entry) => entry.apiKey), ["limited-access", "healthy-access"]);
+    assert.equal(lookups.length, 1);
+    assert.equal(lookups[0].url, "https://chatgpt.com/backend-api/wham/usage");
+    assert.equal(lookups[0].headers.get("authorization"), "Bearer limited-access");
+    assert.equal(lookups[0].headers.get("chatgpt-account-id"), "chat-limited");
+    const limited = loadCodexAccounts().accounts.find((entry) => entry.id === "limited")!;
+    assert.equal(limited.quota?.seven_day?.remainingPercent, 0);
+    assert.equal(limited.refresh, "r1");
+    const later = Date.now() + 20_000;
+    t.mock.method(Date, "now", () => later);
+    assert.equal((await provider.streamSimple(model, {}, auth).result()).stopReason, "stop");
+    assert.equal(sent.at(-1).apiKey, "healthy-access");
+    assert.equal(lookups.length, 1);
+  });
+});
+
+test("Codex model-specific exhaustion does not block unrelated models", async () => {
+  await withCodexStore((path) => {
+    saveCodexAccounts({ main: { quota: { ...quota(80), scoped: [
+      { id: "GPT-5.3-Codex-Spark", remainingPercent: 0, resetsAt: new Date(Date.now() + 3_600_000).toISOString() },
+    ] } }, accounts: [{ id: "healthy", access: "healthy", refresh: "r", expires: primary.expires }] }, path);
+    assert.equal(chooseCredential(CODEX_SPEC, primary, { modelId: "gpt-5.3-codex-spark" })?.id, "healthy");
+    assert.equal(chooseCredential(CODEX_SPEC, primary, { modelId: "gpt-5.4" })?.id, "main");
+    applyCodexQuotaHeaders("main", { "x-codex-primary-used-percent": "30", "x-codex-primary-window-minutes": "300" });
+    assert.equal(loadCodexAccounts().main?.quota?.seven_day?.remainingPercent, 80, "partial headers retain other windows");
+    assert.equal(chooseCredential(CODEX_SPEC, primary, { modelId: "gpt-5.3-codex-spark" })?.id, "healthy", "base-model headers do not erase scoped exhaustion");
   });
 });
 

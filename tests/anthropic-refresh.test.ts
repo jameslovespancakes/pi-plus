@@ -8,11 +8,12 @@ import {
   accessTokenNeedsRefresh,
   ensureAccessToken,
   refreshDueAccessTokens,
-} from "../src/core/anthropic/quota.ts";
-import { anthropicAccountIdentity } from "../src/core/anthropic/identity.ts";
-import { observeClaudeQuota } from "../src/core/anthropic/usage-cache.ts";
-import { loadAccounts, saveAccounts, type Account } from "../src/core/anthropic/store.ts";
-import { routeAccessToken } from "../src/domains/subscriptions/provider.ts";
+} from "../src/providers/anthropic/quota.ts";
+import { anthropicAccountIdentity } from "../src/providers/anthropic/identity.ts";
+import { observeClaudeQuota } from "../src/providers/anthropic/usage-cache.ts";
+import { loadAccounts, saveAccounts, type Account } from "../src/providers/anthropic/store.ts";
+import { registerClaudeRouting } from "../src/providers/anthropic/serving.ts";
+import { model, message, response } from "./fixtures/provider-stream.ts";
 
 function fixture(account: Account) {
   const directory = mkdtempSync(join(tmpdir(), "pi-plus-anthropic-refresh-"));
@@ -115,7 +116,22 @@ test("routing collapses a persisted sidecar that is the primary Claude identity"
       "anthropic-ratelimit-unified-5h-utilization": "1",
       "anthropic-ratelimit-unified-5h-reset": String(Math.floor((now + 60_000) / 1000)),
     });
-    assert.equal(routeAccessToken(primary), "secondary-access");
+    let provider: any;
+    const sent: string[] = [];
+    const stream = (_model: any, _context: any, options: any) => {
+      sent.push(options.apiKey);
+      return response(message());
+    };
+    registerClaudeRouting({ registerProvider: (value: any) => { provider = value; } } as any, {
+      id: "anthropic", auth: { oauth: {
+        toAuth: async (credential: any) => ({ apiKey: credential.access }),
+        refresh: async () => { throw new Error("unexpected refresh"); },
+      } }, stream, streamSimple: stream,
+    } as any, { sleep: async () => { assert.fail("eligible secondary needs no delay"); } });
+    const auth = await provider.auth.oauth.toAuth({ type: "oauth", access: primary, refresh: "primary-refresh", expires: now + 8 * 60 * 60_000 });
+    const result = await provider.streamSimple({ ...model, id: "claude-opus-5-5" }, { messages: [] }, auth).result();
+    assert.equal(result.stopReason, "stop");
+    assert.deepEqual(sent, ["secondary-access"]);
   } finally {
     if (previous === undefined) delete process.env.PI_ANTHROPIC_AUTH_FILE;
     else process.env.PI_ANTHROPIC_AUTH_FILE = previous;

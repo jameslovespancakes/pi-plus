@@ -33,7 +33,7 @@ async function setup(store: unknown, fetchImpl: typeof fetch) {
 
   const originalFetch = globalThis.fetch;
   globalThis.fetch = fetchImpl;
-  const module = await import(`../src/core/catalog/quality.ts?case=${Math.random()}`);
+  const module = await import(`../src/domains/models/quality.ts?case=${Math.random()}`);
 
   return {
     module,
@@ -200,7 +200,7 @@ test("missing API key reports rather than throwing", async () => {
   delete process.env.ARTIFICIAL_ANALYSIS_API_KEY;
   (await import("../src/core/env.ts")).resetEnvCache();
   try {
-    const module = await import(`../src/core/catalog/quality.ts?case=${Math.random()}`);
+    const module = await import(`../src/domains/models/quality.ts?case=${Math.random()}`);
     const warnings = await module.refreshQuality(true);
     assert.match(warnings[0], /no API key/);
   } finally {

@@ -26,10 +26,11 @@ Before writing code, ask in order:
 ## 2. Package layout
 
 ```text
-src/core/        shared primitives; no pi extension registration
+src/core/        provider-independent configuration, storage, process/SSH and OAuth primitives
+src/providers/   provider implementations, shared serving/recovery, quota and policy composition
 src/domains/     one pi extension per directory, listed in package.json
+src/ui/          provider-independent terminal rendering
 tests/           node:test, run with `npm test`
-bench/           offline benchmarks; never shipped to the model
 ```
 
 `package.json` → `pi.extensions` is the authoritative load list:
@@ -39,6 +40,16 @@ setup · subscriptions · models · workflows · agents · remote · claude-remo
 ```
 
 **A path listed here that does not exist is a fatal load error.** Deleting a domain means deleting its entry, its tests, and its docs in the same change.
+
+See [docs/architecture.md](docs/architecture.md) for module ownership. `tests/architecture.test.ts` enforces one-way dependencies and an acyclic runtime import graph:
+
+- Core never imports providers or domains.
+- Shared provider mechanisms never import concrete providers.
+- Providers never import extension domains.
+- Domains do not import other domains' internals.
+- Shared renderers receive display data, not provider implementations.
+
+Workflow modules are grouped under `definitions`, `execution`, `agents`, `runs`, `replay`, `workspace`, `advisory`, `review`, `ui`, and `builtins`; there is no catch-all `runtime/` directory.
 
 ## 3. pi's runtime model
 

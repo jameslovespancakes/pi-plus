@@ -1,6 +1,6 @@
 import { readStoredCredential, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { isGeminiAccount } from "../../core/quota/pool.ts";
+import { isGeminiAccount } from "../../providers/gemini/quota.ts";
 import {
   configureUsageSources,
   refreshUsage,
@@ -8,8 +8,9 @@ import {
   stopPolling,
   subscribe,
   usageState,
-} from "../../services/usage-service.ts";
-import { renderUsageLines, usageSummaryText } from "../../ui/usage-bars.ts";
+} from "../../providers/usage/service.ts";
+import { renderUsageLines } from "../../ui/usage-bars.ts";
+import { createUsageView, usageSummaryText } from "../../providers/usage/presentation.ts";
 import { formatTokens, sanitize } from "../../ui/format.ts";
 
 /** Compact session footer with shared subscription usage bars. */
@@ -162,7 +163,7 @@ export function registerFooter(pi: ExtensionAPI): void {
 
           if (showUsage) {
             // The right-hand column follows the provider in use.
-            lines.push(...renderUsageLines(usageState(), theme, width, { provider: model?.provider, modelId: model?.id }));
+            lines.push(...renderUsageLines(createUsageView(usageState(), { provider: model?.provider, modelId: model?.id }), theme, width));
           }
 
           // Final safety net: never emit a line wider than the terminal.

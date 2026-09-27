@@ -8,7 +8,7 @@ import {
   routableProviders,
   type AccountProvider,
   type RoutingMode,
-} from "../src/core/accounts/registry.ts";
+} from "../src/providers/shared/accounts/registry.ts";
 
 function stub(id: string, withRouting = false): AccountProvider {
   let mode: RoutingMode = "sequential";

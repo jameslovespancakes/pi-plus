@@ -26,7 +26,7 @@
   },
   "files": [
     "src",
-    "!src/core/anthropic/vendor/README.md",
+    "!src/providers/anthropic/vendor/README.md",
     "server",
     "config/skills",
     "README.md",

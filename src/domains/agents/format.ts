@@ -17,7 +17,7 @@ export interface BoardDelivery {
   thread: DeliveryThread;
 }
 
-function cleanLine(value: unknown, max: number): string {
+export function cleanLine(value: unknown, max = 140): string {
   const text = String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 }

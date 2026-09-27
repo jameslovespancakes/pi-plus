@@ -7,13 +7,12 @@ import { join } from "node:path";
 import {
   WorkflowAgentLimitError,
   WorkflowAgentLimiter,
-} from "../src/domains/workflows/runtime/agent-limits.ts";
-import { combinedAgentAttemptError } from "../src/domains/workflows/runtime/agent-failure.ts";
+} from "../src/domains/workflows/execution/agent-limits.ts";
 import {
   providerErrorFromMessages,
   WorkflowProviderError,
-} from "../src/domains/workflows/runtime/agent-retry.ts";
-import { WorktreeRegistry } from "../src/domains/workflows/runtime/worktree.ts";
+} from "../src/domains/workflows/agents/provider-error.ts";
+import { WorktreeRegistry } from "../src/domains/workflows/workspace/worktree.ts";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
@@ -76,16 +75,4 @@ test("Codex access-verification glitches identify the selected model and are ret
   assert.match(error.message, /selected model openai-codex\/gpt-5\.6-sol/);
   assert.match(error.message, /No alternate model was requested/);
   assert.match(error.message, /Daybreak Blue/);
-});
-
-test("retry failure reports both the earlier provider error and final agent limit", () => {
-  const error = combinedAgentAttemptError(
-    "implement",
-    [new Error("503 service unavailable during implementation")],
-    new WorkflowAgentLimitError(1),
-  );
-
-  assert.match(error.message, /Earlier attempt: 503 service unavailable during implementation/);
-  assert.match(error.message, /Final failure: Workflow live-agent limit of 1 has been reached/);
-  assert.equal(error.errors.length, 2);
 });

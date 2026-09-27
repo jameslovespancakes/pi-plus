@@ -8,6 +8,56 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+### Changed
+
+- Restructured provider implementations into `src/providers`, keeping shared
+  serving/recovery mechanisms independent of concrete providers and extension UI.
+  Provider usage endpoints and quota projections are colocated; footer and model
+  listing no longer implement their own provider-family rules.
+- Grouped workflow modules by responsibility and split board/worker transports,
+  status, snapshots and UI out of extension entry points. Added dependency-boundary
+  and runtime-cycle tests; removed the child-session/control import cycle.
+- Shared bounded process execution and atomic-write mechanics while preserving
+  strict capture versus tail capture, credential permissions, storage formats,
+  and per-caller failure policies.
+- Review follow-ups now share normal workflow tracking, stop handles and safe
+  completion delivery. Full retained results stay in UI-only receipts; model
+  notifications remain bounded. Live progress bindings have one session owner.
+- Account failover now retries the pending provider request on eligible accounts
+  for the same model, with three fallback rounds after 10, 25, and 60 seconds.
+  Workflow authors no longer configure `agentRetries`; completed tools are not
+  replayed and native/provider retry budgets do not multiply.
+- Workflow titles use readable capitalization while running and after completion,
+  with recorded cost alongside the title and concise Finished, Failed, Stopped,
+  or Paused outcomes. Run IDs and detailed usage are available on expansion.
+- Completion receipts appear immediately through pi's native entry rendering;
+  bounded parent notifications arrive at safe turn boundaries or wake an idle
+  parent, without interrupting tool batches or duplicating visible results.
+
+- Removed the workflow board's latest-output preview. Status tools return only
+  active agents and at most ten recent visible transcript entries, including
+  actual tool output; both response text and details are bounded.
+- Limit failures can recheck the serving Claude, Codex, or Gemini account through
+  non-inference usage endpoints, with shared checks, bounded waits, and polling
+  cooldowns. Codex and Gemini model/family allowances remain independently scoped.
+
+### Fixed
+
+- Agent popup scrolling clamps at both ends, uses viewport-sized page movement,
+  and preserves the reading position while new output arrives. Native mouse-wheel
+  deltas are respected; returning to the bottom resumes following output.
+- Partial Codex quota headers preserve other known windows and scoped exhaustion.
+- Headerless and status-only limits drive account failover; server Retry-After
+  hints, model-scoped Claude quotas, and all exhausted reset windows are honored.
+  Claude polling preserves concurrent request cooldowns, and serving uses its
+  existing refresh coordination. Cancelled refresh waiters cannot send late
+  requests; partially exposed output prevents retries and workflow auto-resume.
+- Finished workflow widgets cannot be recreated by late progress or finalizer
+  updates. Cleanup is idempotent, runs before slow finalizers, survives observer
+  failures, and clears on cancellation even if a task does not settle.
+- Failed agents sort ahead of completed agents in the compact live board, so
+  failures are not hidden below its row limit.
+
 ## [1.0.24] - 2026-09-26
 
 ### Fixed

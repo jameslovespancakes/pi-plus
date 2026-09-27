@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerCatalogTool } from "./catalog-tool.ts";
-import { registerPolicyGate } from "./policy-gate.ts";
+import { registerPolicyGate } from "./provider-policy.ts";
 
 /**
  * Models domain: which models exist, how good they are, and what they cost.
