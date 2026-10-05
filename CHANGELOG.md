@@ -8,6 +8,8 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+## [1.0.26] - 2026-10-05
+
 ### Added
 
 - Primary logins can be enabled or disabled in `/accounts`. A disabled primary
@@ -540,7 +542,8 @@ First published release.
   truncated to `claude` and named neither the window nor the model. They now
   show the model family, for example `Fable`.
 
-[Unreleased]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.25...HEAD
+[Unreleased]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.26...HEAD
+[1.0.26]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.25...v1.0.26
 [1.0.25]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.24...v1.0.25
 [1.0.24]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.23...v1.0.24
 [1.0.23]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.22...v1.0.23
