@@ -28,17 +28,21 @@ export interface AccountRow {
   state: AccountState;
   primary?: boolean;
   detail?: string;
+  /** Saved logins behind this one real account; never separate UI rows. */
+  linkedAccounts?: Array<{ id: string; enabled: boolean }>;
 }
 
 export type PrimaryAccountResolver = (
   provider: AccountProvider,
 ) => ManagedAccount | undefined | Promise<ManagedAccount | undefined>;
 
-/** Adds pi's own credential to a provider's sidecar-managed accounts. */
+type AccountGroup = ManagedAccount & { linkedAccounts?: ManagedAccount[] };
+
+/** Adds pi's own credential and groups saved logins by provider identity. */
 export async function providerAccounts(
   provider: AccountProvider,
   resolvePrimary?: PrimaryAccountResolver,
-): Promise<ManagedAccount[]> {
+): Promise<AccountGroup[]> {
   // Resolve serially so providers that discover identity through a profile
   // endpoint do not burst the same endpoint for primary and sidecar accounts.
   const primary = resolvePrimary
@@ -50,15 +54,24 @@ export async function providerAccounts(
     : [primary, ...accounts];
 
   const ids = new Set<string>();
-  const identities = new Set<string>();
-  return combined.filter((account) => {
-    if (ids.has(account.id)) return false;
+  const identities = new Map<string, AccountGroup>();
+  const groups: AccountGroup[] = [];
+  for (const account of combined) {
+    if (ids.has(account.id)) continue;
     ids.add(account.id);
-    if (!account.identity) return true;
-    if (identities.has(account.identity)) return false;
-    identities.add(account.identity);
-    return true;
-  });
+    const existing = account.identity ? identities.get(account.identity) : undefined;
+    if (existing) {
+      existing.linkedAccounts ??= [{ ...existing }];
+      existing.linkedAccounts.push(account);
+      existing.enabled ||= account.enabled;
+      if (existing.primary && existing.label === "Primary") existing.label = account.label;
+    } else {
+      const group = { ...account };
+      groups.push(group);
+      if (account.identity) identities.set(account.identity, group);
+    }
+  }
+  return groups;
 }
 
 /** Flattens provider accounts while loading providers in parallel. */
@@ -67,7 +80,7 @@ export async function accountRows(
   resolvePrimary?: PrimaryAccountResolver,
 ): Promise<AccountRow[]> {
   const groups = await Promise.all(providers.map(async (provider) => {
-    let accounts: ManagedAccount[];
+    let accounts: AccountGroup[];
     try {
       accounts = await providerAccounts(provider, resolvePrimary);
     } catch {
@@ -81,6 +94,7 @@ export async function accountRows(
       state: account.enabled ? "enabled" as const : "disabled" as const,
       primary: account.primary,
       detail: account.primary ? "primary · managed by pi auth" : undefined,
+      linkedAccounts: account.linkedAccounts?.map(({ id, enabled }) => ({ id, enabled })),
     }));
   }));
   return groups.flat();
@@ -114,8 +128,7 @@ const RENAME_ID = "__action_rename";
 
 export interface AccountPickerDeps {
   rows: () => Promise<AccountRow[]>;
-  /** Applies a toggle synchronously for one-render updates. */
-  toggle: (providerId: string, accountId: string) => AccountState;
+  toggle: (providerId: string, accountId: string) => AccountState | Promise<AccountState>;
 }
 
 export async function openAccountsPicker(ctx: any, deps: AccountPickerDeps): Promise<PickerAction> {
@@ -123,7 +136,7 @@ export async function openAccountsPicker(ctx: any, deps: AccountPickerDeps): Pro
 
   const { SettingsList } = await import("@earendil-works/pi-tui");
 
-  return await ctx.ui.custom((_tui: any, theme: any, _keys: any, done: (value?: unknown) => void) => {
+  return await ctx.ui.custom((tui: any, theme: any, _keys: any, done: (value?: unknown) => void) => {
     const toggleValues = [
       colourAccountState(theme, "enabled"),
       colourAccountState(theme, "disabled"),
@@ -132,7 +145,7 @@ export async function openAccountsPicker(ctx: any, deps: AccountPickerDeps): Pro
     const items: any[] = rows.map((row) => ({
       id: row.id,
       label: labelFor(theme, row),
-      values: row.primary ? [colourAccountState(theme, row.state)] : [...toggleValues],
+      values: [...toggleValues],
       currentValue: colourAccountState(theme, row.state),
       description: row.detail,
     }));
@@ -156,20 +169,19 @@ export async function openAccountsPicker(ctx: any, deps: AccountPickerDeps): Pro
     }
 
     let list: any;
+    let changing = false;
 
-    const onChange = (id: string) => {
+    const onChange = async (id: string) => {
       if (id === ADD_ID) { done({ kind: "add" }); return; }
       if (id === RENAME_ID) { done({ kind: "rename" }); return; }
 
       const row = rows.find((r) => r.id === id);
       const item = items.find((i) => i.id === id);
       if (!row || !item) return;
-      if (row.primary) {
-        ctx.ui.notify("Primary accounts are managed by pi auth.", "info");
-        return;
-      }
+      if (changing) { list?.updateValue(id, colourAccountState(theme, row.state)); return; }
+      changing = true;
       try {
-        const next = deps.toggle(row.providerId, row.id.slice(row.providerId.length + 1));
+        const next = await deps.toggle(row.providerId, row.id.slice(row.providerId.length + 1));
         row.state = next;
         item.label = labelFor(theme, row);
         list?.updateValue(id, colourAccountState(theme, next));
@@ -177,6 +189,9 @@ export async function openAccountsPicker(ctx: any, deps: AccountPickerDeps): Pro
       } catch (error) {
         list?.updateValue(id, colourAccountState(theme, row.state));
         ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+      } finally {
+        changing = false;
+        tui.requestRender();
       }
     };
 

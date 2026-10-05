@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { accountRetryAt } from "./accounts/provider-errors.ts";
 import { streamWithRecovery, type RecoveryScheduler, type RecoveryReason } from "./accounts/request-recovery.ts";
-import type { Api, AssistantMessage, ModelAuth, OAuthAuth, OAuthCredential, Provider } from "@earendil-works/pi-ai";
+import type { Api, ApiKeyAuth, AssistantMessage, ModelAuth, OAuthAuth, OAuthCredential, Provider } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AccountContext, AccountProvider, ManagedAccount, RoutingMode } from "./accounts/registry.ts";
+import { primaryAccountEnabled } from "./accounts/primary.ts";
 import {
   quotaStateFromHeaders,
   refreshAbortSignal,
@@ -238,23 +239,24 @@ export function createPooledOAuthAdapter<TApi extends Api>(spec: PooledOAuthProv
 
 export function chooseCredential<TApi extends Api>(
   spec: PooledOAuthProviderSpec<TApi>,
-  primary: OAuthCredential,
+  primary: OAuthCredential | undefined,
   options: { excluded?: ReadonlySet<string>; modelId?: string } = {},
 ): RoutedCredential | undefined {
   const pool = storeFor(spec).load();
   const scope = options.modelId ? spec.quotaScope?.(options.modelId) : undefined;
-  const primaryIdentity = credentialIdentity(spec, primary);
+  if (!primaryAccountEnabled(spec.id)) primary = undefined;
+  const primaryIdentity = primary ? credentialIdentity(spec, primary) : undefined;
   const identities = new Set(primaryIdentity ? [primaryIdentity] : []);
-  const tokens = new Set([primary.access]);
+  const tokens = new Set(primary ? [primary.access] : []);
   const duplicate = pool.accounts.find((account) => primaryIdentity && credentialIdentity(spec, account) === primaryIdentity);
   const candidates = [
-    {
+    ...(primary ? [{
       id: MAIN,
       order: 0,
       lastUsed: lastUsed.get(`${spec.id}:${MAIN}`) ?? 0,
       quota: spec.quotaFor ? spec.quotaFor(primary, options.modelId, MAIN) : storeFor(spec).primaryQuota(scope) ?? (scope ? duplicate?.modelQuotas?.[scope] : undefined) ?? duplicate?.quota,
       value: { id: MAIN, credential: primary },
-    },
+    }] : []),
     ...pool.accounts
       .filter((account) => {
         if (account.enabled === false || !account.access || tokens.has(account.access)) return false;
@@ -310,7 +312,18 @@ export function registerPooledOAuthProvider<TApi extends Api>(
   if (!oauth || (provider as any)[POOLED]) return;
   // Pi resolves/refreshes the primary credential. Retain only bounded, in-memory
   // associations so the stream boundary can route with the actual selected model.
-  const primaries = new Map<string, { credential: OAuthCredential; auth: ModelAuth }>();
+  const primaries = new Map<string, { credential?: OAuthCredential; auth: ModelAuth }>();
+  const poolSeed = () => storeFor(spec).load().accounts.find((account) => account.enabled !== false && account.access);
+  const poolAuth = async (): Promise<ModelAuth> => {
+    const account = poolSeed();
+    if (!account) throw new Error(`No enabled ${spec.label} accounts. Enable one in /accounts.`);
+    // Only seed native auth here. The existing request router refreshes the
+    // selected sidecar and handles failover before any credential is sent.
+    const auth = await oauth.toAuth(account);
+    primaries.set(account.access, { auth });
+    while (primaries.size > 32) primaries.delete(primaries.keys().next().value!);
+    return auth;
+  };
   const cooldowns = new Map<string, number>();
   const quotaChecks = new Map<string, { nextAt: number; pending: Promise<void> }>();
   const checkQuota = (selected: RoutedCredential, modelId: string): Promise<void> => {
@@ -343,7 +356,7 @@ export function registerPooledOAuthProvider<TApi extends Api>(
         return chooseCredential(spec, primary.credential, { excluded: unavailable, modelId: model.id });
       },
       async stream(selected) {
-        const credential = selected.account ? await freshCredential(spec, selected.account) : primary.credential;
+        const credential = selected.account ? await freshCredential(spec, selected.account) : selected.credential;
         options?.signal?.throwIfAborted();
         selected.credential = credential;
         const auth = await oauth.toAuth(credential);
@@ -400,16 +413,43 @@ export function registerPooledOAuthProvider<TApi extends Api>(
       },
     });
   };
+  const apiKey = provider.auth.apiKey;
+  // Wrap only an existing API-key handler. Adding one to an OAuth-only provider
+  // changes pi's auth resolution: explicit request keys (compaction, branch
+  // summaries) would no longer resolve through the stored OAuth login.
+  const pooledApiKey: ApiKeyAuth | undefined = apiKey && {
+    ...apiKey,
+    ...(apiKey.check ? { check: async (input: Parameters<NonNullable<typeof apiKey.check>>[0]) => {
+      const native = primaryAccountEnabled(spec.id) ? await apiKey.check!(input) : undefined;
+      return native ?? (poolSeed() ? { type: "oauth" as const, source: "OAuth" } : undefined);
+    } } : {}),
+    resolve: async (input) => {
+      if (primaryAccountEnabled(spec.id)) {
+        const native = await apiKey.resolve(input);
+        if (native || input.credential || !poolSeed()) return native;
+      }
+      return { auth: await poolAuth(), source: "OAuth" };
+    },
+  };
   const registered = {
     ...provider,
     [POOLED]: true,
-    auth: { ...provider.auth, oauth: { ...oauth, toAuth: async (credential: OAuthCredential) => {
-      const auth = await oauth.toAuth(credential);
-      primaries.set(credential.access, { credential, auth });
-      while (primaries.size > 32) primaries.delete(primaries.keys().next().value!);
-      spec.onPrimary?.(credential);
-      return auth;
-    } } },
+    auth: { ...provider.auth, ...(pooledApiKey ? { apiKey: pooledApiKey } : {}),
+      oauth: { ...oauth,
+        // Pi still owns the credential lock/store. Preserve a disabled login
+        // unchanged instead of refreshing it or copying a sidecar into auth.json.
+        refresh: (credential: OAuthCredential, signal: AbortSignal) => primaryAccountEnabled(spec.id)
+          ? oauth.refresh(credential, signal) : Promise.resolve(credential),
+        toAuth: async (credential: OAuthCredential) => {
+          if (!primaryAccountEnabled(spec.id)) return poolAuth();
+          const auth = await oauth.toAuth(credential);
+          primaries.set(credential.access, { credential, auth });
+          while (primaries.size > 32) primaries.delete(primaries.keys().next().value!);
+          spec.onPrimary?.(credential);
+          return auth;
+        },
+      },
+    },
     stream: wrap(provider.stream), streamSimple: wrap(provider.streamSimple),
   };
   pi.registerProvider(registered);

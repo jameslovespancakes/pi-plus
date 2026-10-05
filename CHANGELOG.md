@@ -8,6 +8,16 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+### Added
+
+- Primary logins can be enabled or disabled in `/accounts`. A disabled primary
+  stays in pi's auth store; requests use enabled added accounts instead.
+
+### Fixed
+
+- `/accounts` shows one row per account. A primary login that matches an added
+  account is grouped with it and toggled together.
+
 ## [1.0.25] - 2026-09-27
 
 ### Changed

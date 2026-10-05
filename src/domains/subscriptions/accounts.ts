@@ -1,4 +1,5 @@
 import { readStoredCredential, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { primaryAccountEnabled, setPrimaryAccountEnabled } from "../../providers/shared/accounts/primary.ts";
 import {
   accountRows,
   openAccountsPicker,
@@ -58,7 +59,7 @@ async function primaryAccount(provider: AccountProvider): Promise<ManagedAccount
     return {
       id: "main",
       label: "Primary",
-      enabled: true,
+      enabled: primaryAccountEnabled(provider.id),
       expiresAt: credential.type === "oauth" ? credential.expires : undefined,
       primary: true,
       identity: credential.type === "oauth" ? await provider.identify?.(credential.access) : undefined,
@@ -121,21 +122,44 @@ async function pickAccount(ctx: any, provider: AccountProvider): Promise<string 
 }
 
 export function registerAccountCommands(pi: ExtensionAPI): void {
-  const toggle = (providerId: string, accountId: string): AccountState => {
-    const provider = accountProvider(providerId);
-    if (!provider?.setEnabled) throw new Error(`${providerId} accounts cannot be disabled.`);
-    const next = pendingState.get(`${providerId}:${accountId}`) === "enabled" ? "disabled" : "enabled";
-    pendingState.set(`${providerId}:${accountId}`, next);
-    void provider.setEnabled(accountId, next === "enabled").catch(() => {});
+  const toggle = async (providerId: string, accountId: string): Promise<AccountState> => {
+    const key = `${providerId}:${accountId}`;
+    const next = pendingState.get(key) === "enabled" ? "disabled" : "enabled";
+    const members = pendingMembers.get(key) ?? [{ id: accountId, enabled: next === "disabled" }];
+    const setEnabled = async (id: string, enabled: boolean) => {
+      if (id === "main") setPrimaryAccountEnabled(providerId, enabled);
+      else {
+        const provider = accountProvider(providerId);
+        if (!provider?.setEnabled) throw new Error(`${providerId} accounts cannot be disabled.`);
+        await provider.setEnabled(id, enabled);
+      }
+    };
+    const changed: typeof members = [];
+    try {
+      for (const member of members) {
+        await setEnabled(member.id, next === "enabled");
+        changed.push(member);
+      }
+    } catch (error) {
+      for (const member of changed.reverse()) await setEnabled(member.id, member.enabled).catch(() => {});
+      throw error;
+    }
+    pendingMembers.set(key, members.map((member) => ({ ...member, enabled: next === "enabled" })));
+    pendingState.set(key, next);
     return next;
   };
 
   const pendingState = new Map<string, AccountState>();
+  const pendingMembers = new Map<string, Array<{ id: string; enabled: boolean }>>();
 
   const rows = async () => {
     const list = await accountRows(accountProviders(), primaryAccount);
     pendingState.clear();
-    for (const row of list) pendingState.set(row.id, row.state);
+    pendingMembers.clear();
+    for (const row of list) {
+      pendingState.set(row.id, row.state);
+      if (row.linkedAccounts) pendingMembers.set(row.id, row.linkedAccounts);
+    }
     return list;
   };
 

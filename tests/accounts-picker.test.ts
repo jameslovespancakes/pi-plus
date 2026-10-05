@@ -54,7 +54,9 @@ test("a sidecar login matching the primary identity is deduplicated", async () =
     identity: "user-1",
   }));
 
-  assert.deepEqual(accounts, [{ ...primary, identity: "user-1" }, secondary]);
+  assert.deepEqual(accounts, [{ ...primary, label: "Personal", identity: "user-1",
+    linkedAccounts: [{ ...primary, identity: "user-1" }, duplicate],
+  }, secondary]);
 });
 
 test("duplicate sidecar logins collapse even when no primary credential exists", async () => {
@@ -62,7 +64,19 @@ test("duplicate sidecar logins collapse even when no primary credential exists",
   const duplicate = { id: "two", label: "Also personal", enabled: true, identity: "user-1" };
   const accounts = await providerAccounts(provider([first, duplicate]));
 
-  assert.deepEqual(accounts, [first]);
+  assert.deepEqual(accounts, [{ ...first, linkedAccounts: [first, duplicate] }]);
+});
+
+test("the picker shows two real accounts for three saved logins and retains their toggle targets", async () => {
+  for (const enabled of [true, false]) {
+    const duplicate = { id: "personal", label: "Personal", enabled, identity: "user-1" };
+    const secondary = { id: "secondary", label: "Secondary", enabled: true, identity: "user-2" };
+    const rows = await accountRows([provider([duplicate, secondary])], () => ({ ...primary, enabled, identity: "user-1" }));
+    assert.equal(rows.length, 2);
+    assert.deepEqual(rows.map((row) => row.label), ["Personal", "Secondary"]);
+    assert.equal(rows[0].state, enabled ? "enabled" : "disabled");
+    assert.deepEqual(rows[0].linkedAccounts, [{ id: "main", enabled }, { id: "personal", enabled }]);
+  }
 });
 
 test("primary lookup failures do not hide added accounts", async () => {

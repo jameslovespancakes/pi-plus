@@ -23,6 +23,8 @@ export interface PiPlusConfig {
   env: Record<string, string>;
   policy: PolicySection;
   remote: RemoteSection;
+  /** Routing preference only; primary credentials remain in pi's auth store. */
+  disabledPrimaryAccounts?: string[];
 }
 
 const DEFAULTS: PiPlusConfig = {
@@ -103,6 +105,8 @@ export function configPath(): string {
 
 function normalize(raw: Partial<PiPlusConfig> | undefined): PiPlusConfig {
   return {
+    ...(Array.isArray(raw?.disabledPrimaryAccounts)
+      ? { disabledPrimaryAccounts: raw.disabledPrimaryAccounts.filter((id) => typeof id === "string") } : {}),
     env: raw?.env && typeof raw.env === "object" ? { ...raw.env } : {},
     policy: {
       autoApprove: Array.isArray(raw?.policy?.autoApprove) ? raw.policy.autoApprove : DEFAULTS.policy.autoApprove,

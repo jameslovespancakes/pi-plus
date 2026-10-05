@@ -85,7 +85,10 @@ usage in the footer. Supports Anthropic, OpenAI Codex, Gemini, Kimi Code, and xA
  Work 72% · Personal 58%
 ```
 
-**`/accounts`** adds, reauthorizes, and toggles accounts.
+**`/accounts`** adds, reauthorizes, and toggles accounts, including the primary
+login. Disabled primary credentials stay in pi's auth store; requests use an
+enabled added account instead. Reauthorize an existing added account with
+`/accounts reauth <provider> <name>`; use pi's `/login <provider>` for a primary login.
 **`/routing quota-aware`** uses reported capacity; **`/routing sequential`**
 follows account order. **`/usage`** refreshes the bars.
 

@@ -1,4 +1,5 @@
 import { anthropicAccountIdentity, cachedAnthropicAccountIdentity } from "./identity.ts";
+import { primaryAccountEnabled } from "../shared/accounts/primary.ts";
 import { loadAccounts, type Account as AnthropicAccount } from "./store.ts";
 import { ensureAccessToken } from "./quota.ts";
 import { readClaudeQuota } from "./usage-cache.ts";
@@ -68,7 +69,7 @@ export async function fetchClaudeRows(
   try {
     const primary = await primaryOAuth(ctx, "anthropic", read);
     if (!primary) {
-      errors.push(`${primaryGroup}: not logged in`);
+      if (!sidecars.length && primaryAccountEnabled("anthropic")) errors.push(`${primaryGroup}: not logged in`);
     } else {
       // pi's own login is often the same Claude account as a pooled one.
       // Counting it twice filed every window twice and marked the pool partial.
@@ -111,7 +112,7 @@ export async function fetchClaudeRows(
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       errors.push(/invalid_grant/i.test(message)
-        ? `${entry.group}: login expired, run /accounts reauth ${entry.account?.label ?? entry.account?.id ?? ""}`.trim()
+        ? `${entry.group}: login expired, run /accounts reauth anthropic ${entry.account?.label ?? entry.account?.id ?? ""}`.trim()
         : `${entry.group}: ${message}`);
     }
   }
