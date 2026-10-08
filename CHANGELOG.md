@@ -8,6 +8,12 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+### Fixed
+
+- `/accounts reauth` can renew the primary login. Adding an account that is the
+  primary login now reauthorizes it instead of saving an unusable duplicate.
+- A rejected Codex login shows how to reauthorize instead of `HTTP 401`.
+
 ## [1.0.26] - 2026-10-05
 
 ### Added

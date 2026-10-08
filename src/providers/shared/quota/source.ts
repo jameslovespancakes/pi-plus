@@ -64,13 +64,13 @@ export async function primaryOAuth(
     // A rejected refresh token needs a new login, not automatic deletion.
     // Never echo a raw OAuth response into the HUD.
     if (/invalid_grant|refresh token expired/i.test(errorText(error))) {
-      throw new Error(`login expired, run /login ${providerId}`, { cause: error });
+      throw new Error(`login expired, run /accounts reauth ${providerId}`, { cause: error });
     }
     throw error;
   }
   const refreshed = read(providerId);
   if (usableOAuth(refreshed)) return refreshed;
-  throw new Error(`login expired, run /login ${providerId}`);
+  throw new Error(`login expired, run /accounts reauth ${providerId}`);
 }
 
 export const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);

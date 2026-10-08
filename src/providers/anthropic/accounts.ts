@@ -3,8 +3,11 @@ import type { AccountContext, AccountProvider, ManagedAccount, RoutingMode } fro
 import { anthropicAccountIdentity } from "./identity.ts";
 import { authorize, exchange } from "./oauth.ts";
 import { ensureAccessToken } from "./quota.ts";
+import { savePrimaryLogin } from "../shared/accounts/primary.ts";
+import { builtinProvider } from "../shared/builtin.ts";
 import {
   getRoutingMode,
+  MAIN_ACCOUNT_ID,
   loadAccounts,
   saveAccount,
   setRoutingMode,
@@ -111,6 +114,12 @@ export const anthropicAccounts: AccountProvider = {
   },
 
   async reauth(ctx, accountId): Promise<string | undefined> {
+    if (accountId === MAIN_ACCOUNT_ID) {
+      const result = await authenticate(ctx);
+      if (!result) return undefined;
+      await savePrimaryLogin(builtinProvider("anthropic"), { type: "oauth", ...result });
+      return "Primary";
+    }
     const storage = loadAccounts();
     const account = storage?.accounts.find(
       (candidate) => candidate.id === accountId || candidate.label === accountId,

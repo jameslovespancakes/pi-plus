@@ -4,7 +4,8 @@ import { streamWithRecovery, type RecoveryScheduler, type RecoveryReason } from 
 import type { Api, ApiKeyAuth, AssistantMessage, ModelAuth, OAuthAuth, OAuthCredential, Provider } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AccountContext, AccountProvider, ManagedAccount, RoutingMode } from "./accounts/registry.ts";
-import { primaryAccountEnabled } from "./accounts/primary.ts";
+import { readStoredCredential } from "@earendil-works/pi-coding-agent";
+import { primaryAccountEnabled, savePrimaryLogin } from "./accounts/primary.ts";
 import {
   quotaStateFromHeaders,
   refreshAbortSignal,
@@ -177,6 +178,14 @@ export function createPooledOAuthAdapter<TApi extends Api>(spec: PooledOAuthProv
       if (!await ctx.ui.confirm(`Add ${spec.label} account`, prompt)) return undefined;
 
       const credential = await authenticate(spec, ctx);
+      // Signing in again as the primary account is a reauth, not a new account.
+      const primary = readStoredCredential(spec.id);
+      const identity = credentialIdentity(spec, credential);
+      if (primary?.type === "oauth" && identity && credentialIdentity(spec, primary) === identity) {
+        await savePrimaryLogin(spec.createProvider(), credential);
+        ctx.ui.notify(`That is your primary ${spec.label} login, so it was reauthorized instead of added.`, "info");
+        return undefined;
+      }
       const duplicate = duplicateAccount(spec, credential);
       if (duplicate) throw new Error(`That account is already saved as “${accountLabel(spec, duplicate)}”.`);
 
@@ -192,6 +201,10 @@ export function createPooledOAuthAdapter<TApi extends Api>(spec: PooledOAuthProv
     },
 
     async reauth(ctx, accountId): Promise<string | undefined> {
+      if (accountId === MAIN) {
+        await savePrimaryLogin(spec.createProvider(), await authenticate(spec, ctx));
+        return "Primary";
+      }
       const account = store().load().accounts.find(
         (candidate) => candidate.id === accountId || candidate.label === accountId,
       );

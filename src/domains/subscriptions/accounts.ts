@@ -105,7 +105,9 @@ async function listAll(ctx: any): Promise<void> {
 }
 
 async function pickAccount(ctx: any, provider: AccountProvider): Promise<string | undefined> {
-  const accounts = (await provider.list()).filter((account) => !account.primary);
+  // pi's own login is reauthorized here too, so a dead primary never needs a duplicate account.
+  const primary = await primaryAccount(provider);
+  const accounts = [...(primary ? [primary] : []), ...(await provider.list()).filter((account) => !account.primary)];
   if (accounts.length === 0) {
     ctx.ui.notify(`No ${provider.label} accounts yet. Add one with /accounts add ${provider.id}.`, "info");
     return undefined;

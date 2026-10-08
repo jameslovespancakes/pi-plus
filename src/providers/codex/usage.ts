@@ -38,6 +38,7 @@ export async function fetchCodexRows(
       },
       signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(TIMEOUT_MS)]) : AbortSignal.timeout(TIMEOUT_MS),
     });
+    if (response.status === 401) return { rows: [], error: "Codex: login rejected, run /accounts reauth openai-codex" };
     if (!response.ok) return { rows: [], error: `Codex: HTTP ${response.status}`,
       ...(response.status === 429 && { retryAt: accountRetryAt({ "retry-after": response.headers.get("retry-after") ?? "" }) }) };
     const body = await response.json() as any;
