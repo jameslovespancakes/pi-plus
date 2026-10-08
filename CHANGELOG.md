@@ -8,6 +8,8 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+## [1.0.27] - 2026-10-08
+
 ### Fixed
 
 - `/accounts reauth` can renew the primary login. Adding an account that is the
@@ -548,7 +550,8 @@ First published release.
   truncated to `claude` and named neither the window nor the model. They now
   show the model family, for example `Fable`.
 
-[Unreleased]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.26...HEAD
+[Unreleased]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.27...HEAD
+[1.0.27]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.26...v1.0.27
 [1.0.26]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.25...v1.0.26
 [1.0.25]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.24...v1.0.25
 [1.0.24]: https://github.com/jameslovespancakes/pi-plus/compare/v1.0.23...v1.0.24
