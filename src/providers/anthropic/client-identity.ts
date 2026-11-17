@@ -8,7 +8,7 @@ import { xxhash64 } from "./xxhash64.ts";
  */
 
 /** Pinned to the Claude Code release being imitated. */
-export const CLAUDE_CODE_VERSION = "2.1.280";
+export const CLAUDE_CODE_VERSION = "2.1.290";
 
 /** Claude Code checksum constants. They can change between CLI releases. */
 const CCH_SEED = 0x4d659218e32a3268n;
@@ -46,21 +46,115 @@ export function billingHeader(sample: string, entrypoint = "cli", version = CLAU
 /**
  * Fills in the `cch` placeholder of an already-serialised request body.
  *
- * `model` and `max_tokens` are blanked before hashing, matching the official
- * canonicalisation. Returns the input unchanged when no billing header is
- * present, so this is a no-op for non-Anthropic traffic.
+ * Returns the input unchanged when no billing header is present, so this is a
+ * no-op for non-Anthropic traffic.
  */
 export async function signRequestBody(bodyString: string): Promise<string> {
   if (!CCH_SIGNED.test(bodyString)) return bodyString;
 
   const unsigned = bodyString.replace(CCH_SIGNED, `$1${CCH_PLACEHOLDER}`);
-  const canonical = JSON.parse(unsigned);
-  canonical.model = "";
-  delete canonical.max_tokens;
-
-  const bytes = new TextEncoder().encode(JSON.stringify(canonical));
+  const bytes = canonicalBodyBytes(new TextEncoder().encode(unsigned));
   const token = ((await xxhash64(bytes, CCH_SEED)) & 0xfffffn).toString(16).padStart(5, "0");
   return unsigned.replace(CCH_UNSIGNED, `$1cch=${token};`);
+}
+
+const utf8 = (s: string) => new TextEncoder().encode(s);
+const MODEL_KEY = utf8('"model":"');
+const FALLBACKS_KEY = utf8('"fallbacks":[');
+const CREDIT_KEY = utf8('"fallback_credit_token":"');
+const MAX_TOKENS_KEY = utf8('"max_tokens":');
+const QUOTE = 0x22, COMMA = 0x2c, BACKSLASH = 0x5c, OPEN = 0x5b, CLOSE = 0x5d;
+
+function indexOf(haystack: Uint8Array, needle: Uint8Array, from: number): number {
+  const last = haystack.length - needle.length;
+  outer: for (let i = from; i <= last; i++) {
+    for (let j = 0; j < needle.length; j++) if (haystack[i + j] !== needle[j]) continue outer;
+    return i;
+  }
+  return -1;
+}
+
+type Range = { start: number; end: number };
+
+/** A matched member also absorbs one adjoining comma: the trailing one, else the leading one. */
+function withComma(b: Uint8Array, from: number, start: number, end: number): Range {
+  if (end < b.length && b[end] === COMMA) return { start, end: end + 1 };
+  if (start > from && b[start - 1] === COMMA) return { start: start - 1, end };
+  return { start, end };
+}
+
+/**
+ * Earliest `fallbacks`, `fallback_credit_token` or `max_tokens` member at or
+ * after `from`, which Claude Code leaves out of the checksum.
+ */
+function excludedMember(b: Uint8Array, from: number): Range | undefined {
+  let best: Range | undefined;
+  const take = (r: Range) => { if (!best || r.start < best.start) best = r; };
+
+  const f = indexOf(b, FALLBACKS_KEY, from);
+  if (f >= 0) {
+    let depth = 1, inString = false;
+    for (let i = f + FALLBACKS_KEY.length; i < b.length; i++) {
+      const c = b[i];
+      if (inString) {
+        if (c === BACKSLASH) i++;
+        else if (c === QUOTE) inString = false;
+      } else if (c === QUOTE) inString = true;
+      else if (c === OPEN) depth++;
+      else if (c === CLOSE && --depth === 0) { take(withComma(b, from, f, i + 1)); break; }
+    }
+  }
+
+  const t = indexOf(b, CREDIT_KEY, from);
+  if (t >= 0) {
+    const close = b.indexOf(QUOTE, t + CREDIT_KEY.length);
+    if (close >= 0) take(withComma(b, from, t, close + 1));
+  }
+
+  for (let p = from; ;) {
+    const m = indexOf(b, MAX_TOKENS_KEY, p);
+    const digits = m + MAX_TOKENS_KEY.length;
+    if (m < 0 || digits >= b.length) break;
+    let d = digits;
+    while (d < b.length && b[d] >= 0x30 && b[d] <= 0x39) d++;
+    if (d === digits) { p = digits; continue; }
+    take(withComma(b, from, m, d));
+    break;
+  }
+  return best;
+}
+
+/**
+ * The bytes Claude Code hashes for `cch`. It works on the raw body, not
+ * parsed JSON: every `"model":"…"` value anywhere in the body is blanked
+ * (including tool definitions), and `max_tokens`, `fallbacks` and
+ * `fallback_credit_token` members are removed together with one comma.
+ * Mirrors the native signer in Claude Code 2.1.290.
+ */
+export function canonicalBodyBytes(b: Uint8Array): Uint8Array {
+  const parts: Uint8Array[] = [];
+  let pos = 0;
+  let member = excludedMember(b, 0);
+  for (;;) {
+    const model = indexOf(b, MODEL_KEY, pos);
+    if (member && (model < 0 || member.start < model)) {
+      parts.push(b.subarray(pos, member.start));
+      pos = member.end;
+      member = excludedMember(b, pos);
+      continue;
+    }
+    const value = model + MODEL_KEY.length;
+    const close = model < 0 ? -1 : b.indexOf(QUOTE, value);
+    if (close < 0) break;
+    parts.push(b.subarray(pos, value));
+    pos = close;
+  }
+  parts.push(b.subarray(pos));
+
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let offset = 0;
+  for (const p of parts) { out.set(p, offset); offset += p.length; }
+  return out;
 }
 const USER_AGENT = `claude-cli/${CLAUDE_CODE_VERSION} (external, cli)`;
 const STAINLESS_PACKAGE_VERSION = "0.112.1";

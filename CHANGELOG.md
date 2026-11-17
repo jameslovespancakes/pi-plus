@@ -8,6 +8,16 @@ rolls into major at 10.
 
 ## [Unreleased]
 
+### Fixed
+
+- Claude Code identity version raised to 2.1.290; Anthropic now rejects
+  requests from older versions with `claude_code_version_too_old`.
+- The `cch` request checksum now matches Claude Code's native signer. It
+  hashes the raw body, blanks every `"model"` value (including tool
+  definitions such as the advisor) and drops `max_tokens`, `fallbacks` and
+  `fallback_credit_token`. Previously only the top-level model was blanked.
+  The seed, salt and sample positions are unchanged in 2.1.290.
+
 ## [1.0.27] - 2026-10-08
 
 ### Fixed
